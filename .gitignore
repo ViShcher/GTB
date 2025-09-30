@@ -1,12 +1,26 @@
-# python
-__pycache__/
-*.pyc
+# виртуальное окружение
 .venv/
 venv/
+ENV/
 
-# env & local
+# файлы окружения (секреты, ключи)
 .env
+*.env
 
-# editors
+# база данных (локальная)
+*.sqlite3
+*.db
+
+# кеши и временные файлы
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+*.log
+
+# системные файлы macOS
+.DS_Store
+
+# IDE
 .vscode/
 .idea/
