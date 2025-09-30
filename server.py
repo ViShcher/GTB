@@ -1,78 +1,45 @@
-# server.py — aiogram v3 (webhook, aiohttp)
-import os
-import logging
-from aiohttp import web
-from aiogram import Bot, Dispatcher, types
-from aiogram.types import Update, BotCommand
-from aiogram.filters import Command
+import asyncio
+from fastapi import FastAPI, Request, HTTPException
+from aiogram import Bot, Dispatcher
+from aiogram.types import Update
+from config import settings
+from db import init_db
+from routers import basic_router, workouts_router
 
-logging.basicConfig(level=logging.INFO, format="%(levelname)s:%(name)s:%(message)s")
-log = logging.getLogger("gtb")
 
-BOT_TOKEN = os.getenv("BOT_TOKEN")
-if not BOT_TOKEN:
-    raise RuntimeError("BOT_TOKEN is not set")
+app = FastAPI()
 
-WEBHOOK_PATH = os.getenv("WEBHOOK_PATH", "/webhook/ShlaSaSha")
-PUBLIC_URL = os.getenv("PUBLIC_URL")  # например: https://gtb-production.up.railway.app
-WEBHOOK_URL = os.getenv("WEBHOOK_URL") or (f"{PUBLIC_URL.rstrip('/')}{WEBHOOK_PATH}" if PUBLIC_URL else None)
-if not WEBHOOK_URL:
-    raise RuntimeError("Set WEBHOOK_URL or PUBLIC_URL to build full webhook URL")
 
-WEBHOOK_SECRET = os.getenv("WEBHOOK_SECRET")  # если задан — проверяем заголовок
+# Healthcheck для Railway
+@app.get("/health")
+async def health():
+return {"status": "ok"}
 
-bot = Bot(BOT_TOKEN)
+
+# Инициализация бота и диспетчера
+bot = Bot(settings.bot_token)
 dp = Dispatcher()
+dp.include_router(basic_router)
+dp.include_router(workouts_router)
 
-# -------- Handlers (v3 синтаксис) --------
-@dp.message(Command("start"))
-async def cmd_start(msg: types.Message):
-    await msg.answer("Привет. Живу на вебхуке v3, всё слышу.")
 
-@dp.message()
-async def echo(msg: types.Message):
-    # Простое эхо, чтобы проверить рабочий цикл
-    if msg.text:
-        await msg.answer(f"Эхо: {msg.text}")
+@app.on_event("startup")
+async def on_startup():
+await init_db(settings.database_url)
+# Ставим вебхук под текущий домен
+if not settings.bot_token:
+raise RuntimeError("BOT_TOKEN не задан")
+await bot.set_webhook(settings.webhook_url, drop_pending_updates=True)
 
-# -------- AIOHTTP app / webhook --------
-async def handle_webhook(request: web.Request) -> web.Response:
-    if WEBHOOK_SECRET:
-        if request.headers.get("X-Telegram-Bot-Api-Secret-Token") != WEBHOOK_SECRET:
-            return web.Response(status=403, text="forbidden")
-    try:
-        data = await request.json()
-        update = Update.model_validate(data)
-        await dp.feed_update(bot, update)  # v3: кормим диспетчер апдейтом
-        return web.Response(text="ok")     # Телеге важен быстрый 200
-    except Exception:
-        log.exception("Webhook handler error")
-        # Возвращаем 200, чтобы Телега не ретраила бесконечно
-        return web.Response(text="ok")
 
-async def health(_request: web.Request) -> web.Response:
-    return web.Response(text="ok")
+@app.post(f"/{settings.webhook_secret_path}")
+async def telegram_webhook(request: Request):
+try:
+data = await request.json()
+except Exception as e:
+raise HTTPException(status_code=400, detail=str(e))
 
-async def on_startup(app: web.Application):
-    log.info("Deleting old webhook (drop_pending_updates=True)")
-    await bot.delete_webhook(drop_pending_updates=True)
-    log.info("Setting webhook to %s", WEBHOOK_URL)
-    await bot.set_webhook(url=WEBHOOK_URL, secret_token=WEBHOOK_SECRET)
-    await bot.set_my_commands([BotCommand(command="start", description="Запуск бота")])
 
-async def on_shutdown(app: web.Application):
-    await bot.session.close()
-
-def create_app() -> web.Application:
-    app = web.Application()
-    app.router.add_post(WEBHOOK_PATH, handle_webhook)
-    app.router.add_get("/", health)
-    app.router.add_get("/healthz", health)
-    app.on_startup.append(on_startup)
-    app.on_shutdown.append(on_shutdown)
-    return app
-
-if __name__ == "__main__":
-    app = create_app()
-    port = int(os.getenv("PORT", "8080"))
-    web.run_app(app, host="0.0.0.0", port=port)
+update = Update.model_validate(data)
+await dp.feed_update(bot, update)
+return {"ok": True}
