@@ -1,4 +1,12 @@
-.venv/
+# python
 __pycache__/
-*.sqlite3
+*.pyc
+.venv/
+venv/
+
+# env & local
 .env
+
+# editors
+.vscode/
+.idea/
