@@ -1,80 +1,86 @@
+# server.py
 import os
+import asyncio
 import logging
+from aiohttp import web
 from aiogram import Bot, Dispatcher, types
-from aiogram.utils.executor import start_webhook
+from aiogram.types import Update, BotCommand
 
-logging.basicConfig(level=logging.INFO)
+# ---------- базовая настройка ----------
+logging.basicConfig(level=logging.INFO, format="%(levelname)s:%(name)s:%(message)s")
 log = logging.getLogger("gtb")
 
-# ── обязательные переменные окружения ───────────────────────────────
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 if not BOT_TOKEN:
-    raise RuntimeError("Нет BOT_TOKEN. Задай переменную окружения BOT_TOKEN в Railway.")
+    raise RuntimeError("BOT_TOKEN is not set")
 
-# секрет для пути вебхука (любой случайный текст)
-WEBHOOK_SECRET = os.getenv("WEBHOOK_SECRET", "change_me_secret")
+WEBHOOK_PATH = os.getenv("WEBHOOK_PATH", "/webhook/ShlaSaSha")
 
-# Railway обычно пробрасывает порт в переменную PORT
-PORT = int(os.getenv("PORT", "8000"))
+# Домен: либо явно (WEBHOOK_URL), либо из RAILWAY_PUBLIC_DOMAIN, либо хардкодишь свой домен
+PUBLIC_DOMAIN = os.getenv("RAILWAY_PUBLIC_DOMAIN")
+WEBHOOK_URL = os.getenv("WEBHOOK_URL") or (
+    f"https://{PUBLIC_DOMAIN}{WEBHOOK_PATH}" if PUBLIC_DOMAIN else None
+)
+if not WEBHOOK_URL:
+    raise RuntimeError("Set WEBHOOK_URL or RAILWAY_PUBLIC_DOMAIN to build webhook URL")
 
-# Пытаемся автоматически получить публичный домен Railway:
-# - сначала берём PUBLIC_URL (если ты задал сам),
-# - иначе RAILWAY_PUBLIC_DOMAIN (который отдаёт Railway для сервиса).
-_public = os.getenv("PUBLIC_URL") or os.getenv("RAILWAY_PUBLIC_DOMAIN")
-if not _public:
-    raise RuntimeError(
-        "Не найден PUBLIC_URL или RAILWAY_PUBLIC_DOMAIN.\n"
-        "Подсказка: после первого деплоя в Railway появится домен вида "
-        "your-app.up.railway.app — задай PUBLIC_URL=https://your-app.up.railway.app"
-    )
+WEBHOOK_SECRET = os.getenv("WEBHOOK_SECRET")  # раз уж включили — пусть будет
 
-if not _public.startswith("http"):
-    PUBLIC_URL = f"https://{_public}"
-else:
-    PUBLIC_URL = _public
+bot = Bot(BOT_TOKEN)
+dp = Dispatcher()
 
-# ── параметры вебхука ────────────────────────────────────────────────
-WEBHOOK_PATH = f"/webhook/{WEBHOOK_SECRET}"
-WEBHOOK_URL = f"{PUBLIC_URL}{WEBHOOK_PATH}"
+# ---------- handlers ----------
+@dp.message(commands={"start"})
+async def cmd_start(msg: types.Message):
+    await msg.answer("Привет. Я живу на вебхуке и уже слушаю тебя.")
 
-# ── инициализация бота ──────────────────────────────────────────────
-bot = Bot(token=BOT_TOKEN, parse_mode="HTML")
-dp = Dispatcher(bot)
+@dp.message()
+async def echo(msg: types.Message):
+    await msg.answer(f"Эхо: {msg.text}")
 
-# ── хэндлеры ────────────────────────────────────────────────────────
-@dp.message_handler(commands=["start", "help"])
-async def cmd_start(message: types.Message):
-    await message.answer(
-        "Привет! Я твой фитнес-бот 💪\n"
-        "Команды:\n"
-        "/start — приветствие\n"
-        "/ping — проверка связи"
-    )
+# ---------- aiohttp app ----------
+async def handle_webhook(request: web.Request) -> web.Response:
+    # Проверяем секрет, если он задан
+    if WEBHOOK_SECRET:
+        if request.headers.get("X-Telegram-Bot-Api-Secret-Token") != WEBHOOK_SECRET:
+            return web.Response(status=403, text="forbidden")
 
-@dp.message_handler(commands=["ping"])
-async def cmd_ping(message: types.Message):
-    await message.answer("pong 🏓")
+    try:
+        data = await request.json()
+        update = Update.model_validate(data)
+        # Важно: не блокируем ответ — парсим и отправляем в диспетчер
+        await dp.feed_update(bot, update)
+        return web.Response(text="ok")
+    except Exception:
+        log.exception("Webhook handler error")
+        # Телеге нужно 200, иначе она будет ретраить. Логи у нас есть.
+        return web.Response(text="ok")
 
-# ── lifecycle: ставим/сносим вебхук ─────────────────────────────────
-async def on_startup(dispatcher: Dispatcher):
+async def health(_request: web.Request) -> web.Response:
+    return web.Response(text="ok")
+
+async def on_startup(app: web.Application):
+    # Чистим и выставляем правильный вебхук на наш домен, с секретом и без хвоста апдейтов
     log.info("Deleting old webhook (drop_pending_updates=True)")
     await bot.delete_webhook(drop_pending_updates=True)
-
     log.info("Setting webhook to %s", WEBHOOK_URL)
-    await bot.set_webhook(WEBHOOK_URL)
+    await bot.set_webhook(url=WEBHOOK_URL, secret_token=WEBHOOK_SECRET)
+    # Команды, чтобы на клиенте было красиво
+    await bot.set_my_commands([BotCommand(command="start", description="Запуск бота")])
 
-async def on_shutdown(dispatcher: Dispatcher):
-    log.info("Deleting webhook on shutdown")
-    await bot.delete_webhook()
+async def on_shutdown(app: web.Application):
+    await bot.session.close()
 
-# ── запуск aiohttp-сервера внутри aiogram ───────────────────────────
+def create_app() -> web.Application:
+    app = web.Application()
+    app.router.add_post(WEBHOOK_PATH, handle_webhook)
+    app.router.add_get("/", health)
+    app.router.add_get("/healthz", health)
+    app.on_startup.append(on_startup)
+    app.on_shutdown.append(on_shutdown)
+    return app
+
 if __name__ == "__main__":
-    start_webhook(
-        dispatcher=dp,
-        webhook_path=WEBHOOK_PATH,
-        on_startup=on_startup,
-        on_shutdown=on_shutdown,
-        skip_updates=False,           # мы уже чистим апдейты при set_webhook
-        host="0.0.0.0",
-        port=PORT,
-    )
+    app = create_app()
+    port = int(os.getenv("PORT", "8080"))
+    web.run_app(app, host="0.0.0.0", port=port)
