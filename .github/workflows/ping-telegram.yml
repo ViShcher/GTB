@@ -1,4 +1,4 @@
-name: Ping Telegram (diagnostic)
+name: Ping Telegram
 
 on:
   workflow_dispatch:
@@ -8,27 +8,12 @@ jobs:
   ping:
     runs-on: ubuntu-latest
     steps:
-      - name: Print env sanity (masked)
-        run: |
-          echo "Repo: $GITHUB_REPOSITORY"
-          echo "Branch: $GITHUB_REF_NAME"
-          echo "Actor: $GITHUB_ACTOR"
-
-      - name: Send ping to Telegram and assert OK
+      - name: Send message to Telegram
         env:
           TG_BOT_TOKEN: ${{ secrets.TG_BOT_TOKEN }}
           TG_CHAT_ID: ${{ secrets.TG_CHAT_ID }}
         run: |
-          set -euo pipefail
-          RESPONSE=$(curl -sS "https://api.telegram.org/bot${TG_BOT_TOKEN}/sendMessage" \
+          echo "Отправляю тестовое сообщение..."
+          curl -v "https://api.telegram.org/bot${TG_BOT_TOKEN}/sendMessage" \
             --data-urlencode "chat_id=${TG_CHAT_ID}" \
-            --data-urlencode "text=🔔 Диагностический пинг из GitHub Actions. Коммит: ${GITHUB_SHA} (ветка: ${GITHUB_REF_NAME})")
-          echo "Telegram response: $RESPONSE"
-          echo "$RESPONSE" | python - "$GITHUB_REPOSITORY" <<'PY'
-import json, sys
-data = json.loads(sys.stdin.read())
-if not data.get("ok"):
-    print("FAIL: Telegram API returned error:", data.get("description"), file=sys.stderr)
-    sys.exit(1)
-print("OK: Telegram accepted message.")
-PY
+            --data-urlencode "text=🔔 Тестовое сообщение из GitHub Actions (ветка: ${GITHUB_REF_NAME})"
