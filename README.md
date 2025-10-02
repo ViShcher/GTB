@@ -35,11 +35,10 @@ INFO:gtb:Deleting old webhook (drop_pending_updates=True) INFO:gtb:Setting webho
 - Добавить `/add_set ex_id sets reps weight` и карточки результата
 - Импорт справочника упражнений (CSV/JSON)
 - Категоризация по типам тренировок: strength/cardio/mobility/stretch/circuit
-
-- тест 2
-
-- 222
 - Экспорт отчётов в CSV
 
 
 Если локально хочешь вебхук: поставь `BASE_URL_OVERRIDE` на публичный туннель и дерни `uvicorn server:app`.
+
+
+тест3
