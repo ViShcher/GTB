@@ -1,18 +1,34 @@
-name: Ping Telegram
+name: Ping Telegram (diagnostic)
 
 on:
+  workflow_dispatch:
   push:
-    branches: ["**"]
 
 jobs:
   ping:
     runs-on: ubuntu-latest
     steps:
-      - name: Send simple message
+      - name: Print env sanity (masked)
+        run: |
+          echo "Repo: $GITHUB_REPOSITORY"
+          echo "Branch: $GITHUB_REF_NAME"
+          echo "Actor: $GITHUB_ACTOR"
+
+      - name: Send ping to Telegram and assert OK
         env:
           TG_BOT_TOKEN: ${{ secrets.TG_BOT_TOKEN }}
           TG_CHAT_ID: ${{ secrets.TG_CHAT_ID }}
         run: |
-          curl -sS -X POST "https://api.telegram.org/bot${TG_BOT_TOKEN}/sendMessage" \
-            -d chat_id="${TG_CHAT_ID}" \
-            --data-urlencode "text=✅ GitHub Actions жив. Коммит: $GITHUB_SHA (ветка: $GITHUB_REF_NAME)"
+          set -euo pipefail
+          RESPONSE=$(curl -sS "https://api.telegram.org/bot${TG_BOT_TOKEN}/sendMessage" \
+            --data-urlencode "chat_id=${TG_CHAT_ID}" \
+            --data-urlencode "text=🔔 Диагностический пинг из GitHub Actions. Коммит: ${GITHUB_SHA} (ветка: ${GITHUB_REF_NAME})")
+          echo "Telegram response: $RESPONSE"
+          echo "$RESPONSE" | python - "$GITHUB_REPOSITORY" <<'PY'
+import json, sys
+data = json.loads(sys.stdin.read())
+if not data.get("ok"):
+    print("FAIL: Telegram API returned error:", data.get("description"), file=sys.stderr)
+    sys.exit(1)
+print("OK: Telegram accepted message.")
+PY
