@@ -36,7 +36,9 @@ INFO:gtb:Deleting old webhook (drop_pending_updates=True) INFO:gtb:Setting webho
 - Импорт справочника упражнений (CSV/JSON)
 - Категоризация по типам тренировок: strength/cardio/mobility/stretch/circuit
 
-- тест
+- тест 2
+
+- 222
 - Экспорт отчётов в CSV
 
 
