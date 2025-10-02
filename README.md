@@ -36,7 +36,7 @@ INFO:gtb:Deleting old webhook (drop_pending_updates=True) INFO:gtb:Setting webho
 - Импорт справочника упражнений (CSV/JSON)
 - Категоризация по типам тренировок: strength/cardio/mobility/stretch/circuit
 - Экспорт отчётов в CSV
-
+ТЕСТ
 
 Если локально хочешь вебхук: поставь `BASE_URL_OVERRIDE` на публичный туннель и дерни `uvicorn server:app`.
 
