@@ -2,47 +2,31 @@ name: Telegram Full Repo Dump
 
 on:
   push:
-    branches:
-      - "**"
 
 jobs:
   dump:
     runs-on: ubuntu-latest
-
     steps:
       - name: Check out repo
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
 
-      - name: Build list of tracked text files
-        id: list
-        shell: bash
-        run: |
-          set -euo pipefail
-
-          # 1) все файлы, учтённые гитом (уважаем .gitignore)
-          git ls-files -z > tracked.txt
-
-          # 2) выберем текстовые/конфиговые расширения
-          tr '\0' '\n' < tracked.txt | \
-          grep -E '\.(py|pyi|txt|md|rst|toml|ini|cfg|conf|json|yml|yaml|xml|csv|tsv|sql|sh|bash)$|(^Dockerfile$)|(^Procfile$)|(^\.env\.example$)|(^Makefile$)|(^\.gitignore$)|(^\.editorconfig$)' \
-          > text_files.txt || true
-
-          # 3) подстрахуемся от потенциальных секретов по имени
-          grep -viE '(^|/)\.env($|\.|/)|(^|/)secrets?($|/)|(^|/)token|(^|/)credentials?' text_files.txt \
-          > text_files_sanitized.txt || true
-
-          echo "count=$(wc -l < text_files_sanitized.txt | tr -d ' ')" >> "$GITHUB_OUTPUT"
-
       - name: Build repo_dump.txt
-        id: dump
         shell: bash
         run: |
           set -euo pipefail
+          git ls-files -z > tracked.txt
+          tr '\0' '\n' < tracked.txt > files_all.txt
+
+          # берём только текст/конфиги/скрипты
+          grep -E '\.(py|pyi|txt|md|rst|toml|ini|cfg|conf|json|yml|yaml|xml|csv|tsv|sql|sh|bash)$|(^Dockerfile$)|(^Procfile$)|(^\.env\.example$)|(^Makefile$)|(^\.gitignore$)|(^\.editorconfig$)' files_all.txt > files_text.txt || true
+
+          # на всякий случай выкинем потенциально секретные имена
+          grep -viE '(^|/)\.env($|\.|/)|(^|/)secrets?($|/)|(^|/)token|(^|/)credentials?' files_text.txt > files.txt || true
+
           OUT="repo_dump.txt"
           : > "$OUT"
-
           {
             echo "# Repository dump"
             echo "Repo: $GITHUB_REPOSITORY"
@@ -53,18 +37,16 @@ jobs:
             echo
           } >> "$OUT"
 
-          while IFS= read -r file; do
-            [ -f "$file" ] || continue
-            size=$(stat -c%s "$file" 2>/dev/null || stat -f%z "$file")
+          while IFS= read -r f; do
+            [ -f "$f" ] || continue
+            size=$(wc -c < "$f" | tr -d ' ')
             echo "========================================" >> "$OUT"
-            echo "FILE: $file  (size: ${size} bytes)" >> "$OUT"
+            echo "FILE: $f  (size: ${size} bytes)" >> "$OUT"
             echo "----------------------------------------" >> "$OUT"
-
-            # Ограничим одиночные файлы 1.5 МБ
             if [ "$size" -le 1572864 ]; then
-              # Проверка «похоже на текст»
-              if file -bi "$file" | grep -qi 'charset='; then
-                cat "$file" >> "$OUT"
+              # на всякий случай проверим, что это текст
+              if file -bi "$f" | grep -qi 'charset='; then
+                cat "$f" >> "$OUT"
               else
                 echo "[skipped: non-text or unknown encoding]" >> "$OUT"
               fi
@@ -72,51 +54,16 @@ jobs:
               echo "[skipped: size > 1.5MB]" >> "$OUT"
             fi
             echo >> "$OUT"
-          done < text_files_sanitized.txt
+          done < files.txt
 
-          du -h "$OUT" || true
-
-      - name: Send summary to Telegram
+      - name: Send repo_dump.txt to Telegram
         env:
           TG_BOT_TOKEN: ${{ secrets.TG_BOT_TOKEN }}
           TG_CHAT_ID: ${{ secrets.TG_CHAT_ID }}
         shell: bash
         run: |
           set -euo pipefail
-          COUNT="${{ steps.list.outputs.count }}"
-          SIZE_HUMAN=$(du -h repo_dump.txt | cut -f1)
-          MSG="📦 Full repo dump
-Repo: $GITHUB_REPOSITORY
-Branch: $GITHUB_REF_NAME
-Commit: $GITHUB_SHA
-Files included: ${COUNT}
-Dump size: ${SIZE_HUMAN}
-Pusher: $GITHUB_ACTOR"
-          curl -sS -X POST "https://api.telegram.org/bot${TG_BOT_TOKEN}/sendMessage" \
-            -d chat_id="${TG_CHAT_ID}" \
-            --data-urlencode "text=${MSG}" > /dev/null
-
-      - name: Send repo_dump.txt (split if large)
-        env:
-          TG_BOT_TOKEN: ${{ secrets.TG_BOT_TOKEN }}
-          TG_CHAT_ID: ${{ secrets.TG_CHAT_ID }}
-        shell: bash
-        run: |
-          set -euo pipefail
-          MAX_CHUNK=$((45 * 1024 * 1024))
-          SIZE=$(stat -c%s repo_dump.txt 2>/dev/null || stat -f%z repo_dump.txt)
-
-          if [ "$SIZE" -le "$MAX_CHUNK" ]; then
-            curl -sS -X POST "https://api.telegram.org/bot${TG_BOT_TOKEN}/sendDocument" \
-              -F chat_id="${TG_CHAT_ID}" \
-              -F document="@repo_dump.txt" \
-              -F caption="repo_dump.txt (весь проект одним файлом)" > /dev/null
-          else
-            split -b $MAX_CHUNK -d -a 2 repo_dump.txt repo_dump_part_
-            for f in repo_dump_part_*; do
-              curl -sS -X POST "https://api.telegram.org/bot${TG_BOT_TOKEN}/sendDocument" \
-                -F chat_id="${TG_CHAT_ID}" \
-                -F document="@$f" \
-                -F caption="$f" > /dev/null
-            done
-          fi
+          curl -sS -X POST "https://api.telegram.org/bot${TG_BOT_TOKEN}/sendDocument" \
+            -F chat_id="${TG_CHAT_ID}" \
+            -F document="@repo_dump.txt" \
+            -F caption="repo_dump.txt (весь проект одним файлом)" > /dev/null
