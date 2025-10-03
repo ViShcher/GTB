@@ -22,11 +22,10 @@ async def on_startup():
     if not settings.bot_token:
         raise RuntimeError("BOT_TOKEN не задан")
     await init_db(settings.database_url)
-    # Ставим вебхук на текущий домен/путь
     await bot.set_webhook(settings.webhook_url, drop_pending_updates=True)
 
 # Вариант 1: фиксированный путь из настроек
-@app.post(f"/{settings.webhook_secret_path.strip('/')}")
+@app.post(f"/{settings.webhook_path.strip('/')}")
 async def telegram_webhook(request: Request):
     try:
         data = await request.json()
