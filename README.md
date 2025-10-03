@@ -16,7 +16,7 @@
 1. Новый проект, подключи репозиторий.
 2. В переменных окружения установи:
 - `BOT_TOKEN`
-- `WEBHOOK_SECRET_PATH` (например, `webhook/ShlaSaSha`)
+- `WEBHOOK_PATH` (например, `webhook/ShlaSaSha`)
 3. Ничего менять не нужно: `railway.toml`, `railpack-plan.json` и `Procfile` уже на месте.
 4. После деплоя проверь логи: должно быть что-то вроде:
 INFO:gtb:Deleting old webhook (drop_pending_updates=True) INFO:gtb:Setting webhook to https://.up.railway.app/webhook/... Running on http://0.0.0.0:8080
