@@ -15,3 +15,7 @@ async def start(msg: Message):
 @basic_router.message(Command("help"))
 async def help_cmd(msg: Message):
     await msg.answer("Доступно: /add_ex <название> — добавить упражнение; /list_ex — список")
+
+@basic_router.message(Command("reset_ui"))
+async def reset_ui(msg: Message):
+    await msg.answer("UI сброшен. Клавиатура убрана, команды обновлены.", reply_markup=ReplyKeyboardRemove())
