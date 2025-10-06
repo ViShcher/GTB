@@ -20,9 +20,9 @@ async def health():
 # Инициализация бота и диспетчера
 bot = Bot(settings.bot_token)
 dp = Dispatcher()
+dp.include_router(profile_router)
 dp.include_router(basic_router)
 dp.include_router(workouts_router)
-dp.include_router(profile_router)
 
 @app.on_event("startup")
 async def on_startup():
