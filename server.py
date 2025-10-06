@@ -4,8 +4,8 @@ from aiogram.types import Update, BotCommand, MenuButtonDefault
 
 from config import settings
 from db import init_db
-from routers import basic_router, workouts_router, profile_router
-from seed_data import ensure_seed_data
+from seed_data import ensure_seed_data  # сиды
+from routers import basic_router, profile_router, training_router  # <-- только эти
 
 app = FastAPI()
 
@@ -18,37 +18,32 @@ async def health():
 bot = Bot(settings.bot_token)
 dp = Dispatcher()
 
-# ВАЖНО: профиль первым, чтобы его /start не перехватывал basic
+# ВАЖНО: порядок
 dp.include_router(profile_router)
 dp.include_router(training_router)
 dp.include_router(basic_router)
-dp.include_router(workouts_router)
 
 @app.on_event("startup")
 async def on_startup():
     if not settings.bot_token:
         raise RuntimeError("BOT_TOKEN не задан")
 
-    # Инициализация БД
     await init_db(settings.database_url)
-    await ensure_seed_data()  
-    
-    # ===== Команды без указания scope (дефолтный скоуп) =====
+    await ensure_seed_data()  # не забываем сиды
+
     await bot.delete_my_commands()
     await bot.set_my_commands(
-    commands=[
-        BotCommand(command="start", description="Запуск бота / онбординг"),
-        BotCommand(command="help", description="Справка по командам"),
-        BotCommand(command="my_profile", description="Мой профиль"),
-        BotCommand(command="train", description="Начать тренировку"),
-    ]
-)
+        commands=[
+            BotCommand(command="start", description="Запуск бота / онбординг"),
+            BotCommand(command="help", description="Справка по командам"),
+            BotCommand(command="my_profile", description="Мой профиль"),
+            BotCommand(command="train", description="Начать тренировку"),
+        ]
+    )
 
-    # Сброс кастомной кнопки меню на стандартную
     await bot.set_chat_menu_button(menu_button=MenuButtonDefault())
-
-    # Установка вебхука на публичный домен Railway + путь из ENV (WEBHOOK_PATH)
     await bot.set_webhook(settings.webhook_url, drop_pending_updates=True)
+
 
 # Эндпоинт вебхука: путь берём из ENV через settings.webhook_path
 @app.post(f"/{settings.webhook_path.strip('/')}")
