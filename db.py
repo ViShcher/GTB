@@ -17,7 +17,7 @@ class User(SQLModel, table=True):
 class MuscleGroup(SQLModel, table=True):
     id: Optional[int] = Field(default=None, primary_key=True)
     name: str
-    slug: str
+    slug: str = Field(index=True, unique=True)
     exercises: List["Exercise"] = Relationship(back_populates="primary_muscle")
 
 class Equipment(SQLModel, table=True):
@@ -27,10 +27,13 @@ class Equipment(SQLModel, table=True):
 class Exercise(SQLModel, table=True):
     id: Optional[int] = Field(default=None, primary_key=True)
     name: str
+    slug: str = Field(index=True, unique=True)
     type: str = Field(description="strength | cardio | mobility | stretch | circuit")
     primary_muscle_id: Optional[int] = Field(default=None, foreign_key="musclegroup.id")
     primary_muscle: Optional["MuscleGroup"] = Relationship(back_populates="exercises")
     equipment_id: Optional[int] = Field(default=None, foreign_key="equipment.id")
+    tip: Optional[str] = Field(default=None, description="краткий совет по технике")
+    is_active: bool = Field(default=True)
 
 class Workout(SQLModel, table=True):
     id: Optional[int] = Field(default=None, primary_key=True)
