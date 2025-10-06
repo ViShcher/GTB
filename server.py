@@ -19,6 +19,7 @@ dp = Dispatcher()
 
 # ВАЖНО: профиль первым, чтобы его /start не перехватывал basic
 dp.include_router(profile_router)
+dp.include_router(training_router)
 dp.include_router(basic_router)
 dp.include_router(workouts_router)
 
