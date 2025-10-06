@@ -5,6 +5,7 @@ from aiogram.types import Update, BotCommand, MenuButtonDefault
 from config import settings
 from db import init_db
 from routers import basic_router, workouts_router, profile_router
+from seed_data import ensure_seed_data
 
 app = FastAPI()
 
@@ -30,18 +31,18 @@ async def on_startup():
 
     # Инициализация БД
     await init_db(settings.database_url)
-
+    await ensure_seed_data()  
+    
     # ===== Команды без указания scope (дефолтный скоуп) =====
     await bot.delete_my_commands()
     await bot.set_my_commands(
-        commands=[
-            BotCommand(command="start", description="Запуск бота / онбординг"),
-            BotCommand(command="help", description="Справка по командам"),
-            BotCommand(command="my_profile", description="Мой профиль"),
-            BotCommand(command="list_ex", description="Список упражнений"),
-            BotCommand(command="add_ex", description="Добавить упражнение"),
-        ]
-    )
+    commands=[
+        BotCommand(command="start", description="Запуск бота / онбординг"),
+        BotCommand(command="help", description="Справка по командам"),
+        BotCommand(command="my_profile", description="Мой профиль"),
+        BotCommand(command="train", description="Начать тренировку"),
+    ]
+)
 
     # Сброс кастомной кнопки меню на стандартную
     await bot.set_chat_menu_button(menu_button=MenuButtonDefault())
