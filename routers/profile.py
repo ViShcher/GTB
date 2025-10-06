@@ -119,20 +119,40 @@ async def pick_gender(cb: CallbackQuery, state: FSMContext):
 async def weight_step(cb: CallbackQuery, state: FSMContext):
     data = await state.get_data()
     w = float(data.get("weight", 70.0))
-    _, action, step = cb.data.split(":")
-    step = float(step) if action in ("inc", "dec") else 0
+
+    parts = cb.data.split(":", maxsplit=2)  # например: ["w","inc","2.5"] или ["w","ok"]
+    action = parts[1]
+
     if action == "inc":
+        step = float(parts[2])
         w += step
-    elif action == "dec":
+        await state.update_data(weight=round(w, 1))
+        await cb.message.edit_text(
+            f"Вес: {round(w,1)} кг\nНастрой кнопками и нажми «Готово».",
+            reply_markup=stepper_kb("w", w, [0.5, 1, 2.5, 5], "кг", True),
+        )
+        await cb.answer()
+        return
+
+    if action == "dec":
+        step = float(parts[2])
         w = max(1.0, w - step)
-    elif action == "ok":
+        await state.update_data(weight=round(w, 1))
+        await cb.message.edit_text(
+            f"Вес: {round(w,1)} кг\nНастрой кнопками и нажми «Готово».",
+            reply_markup=stepper_kb("w", w, [0.5, 1, 2.5, 5], "кг", True),
+        )
+        await cb.answer()
+        return
+
+    if action == "ok":
         # сохраняем и переходим к росту
         async with await get_session(settings.database_url) as session:
             res = await session.exec(select(User).where(User.tg_id == cb.from_user.id))
             user = res.first()
             user.weight_kg = round(w, 1)
             await session.commit()
-        # рост: старт 175 см
+
         await state.update_data(height=175)
         await cb.message.edit_text(
             f"Рост: 175 см\nНастрой кнопками и нажми «Готово».",
