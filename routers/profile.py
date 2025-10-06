@@ -174,19 +174,39 @@ async def weight_step(cb: CallbackQuery, state: FSMContext):
 async def height_step(cb: CallbackQuery, state: FSMContext):
     data = await state.get_data()
     h = int(data.get("height", 175))
-    _, action, step = cb.data.split(":")
-    step = int(float(step)) if action in ("inc", "dec") else 0
+
+    parts = cb.data.split(":", maxsplit=2)  # ["h","inc","2"] или ["h","ok"]
+    action = parts[1]
+
     if action == "inc":
+        step = int(float(parts[2]))
         h = min(230, h + step)
-    elif action == "dec":
+        await state.update_data(height=h)
+        await cb.message.edit_text(
+            f"Рост: {h} см\nНастрой кнопками и нажми «Готово».",
+            reply_markup=stepper_kb("h", h, [1, 2, 5], "см", True),
+        )
+        await cb.answer()
+        return
+
+    if action == "dec":
+        step = int(float(parts[2]))
         h = max(120, h - step)
-    elif action == "ok":
+        await state.update_data(height=h)
+        await cb.message.edit_text(
+            f"Рост: {h} см\nНастрой кнопками и нажми «Готово».",
+            reply_markup=stepper_kb("h", h, [1, 2, 5], "см", True),
+        )
+        await cb.answer()
+        return
+
+    if action == "ok":
         async with await get_session(settings.database_url) as session:
             res = await session.exec(select(User).where(User.tg_id == cb.from_user.id))
             user = res.first()
             user.height_cm = h
             await session.commit()
-        # возраст: старт 25
+
         await state.update_data(age=25)
         await cb.message.edit_text(
             f"Возраст: 25 лет\nНастрой кнопками и нажми «Готово».",
@@ -196,32 +216,46 @@ async def height_step(cb: CallbackQuery, state: FSMContext):
         await cb.answer()
         return
 
-    await state.update_data(height=h)
-    await cb.message.edit_text(
-        f"Рост: {h} см\nНастрой кнопками и нажми «Готово».",
-        reply_markup=stepper_kb("h", h, [1, 2, 5], "см", True),
-    )
-    await cb.answer()
-
 # ===== Возраст =====
 @profile_router.callback_query(F.data.startswith("a:"), Onb.age)
 async def age_step(cb: CallbackQuery, state: FSMContext):
     data = await state.get_data()
     a = int(data.get("age", 25))
-    _, action, step = cb.data.split(":")
-    step = int(float(step)) if action in ("inc", "dec") else 0
+
+    parts = cb.data.split(":", maxsplit=2)  # ["a","inc","2"] или ["a","ok"]
+    action = parts[1]
+
     if action == "inc":
+        step = int(float(parts[2]))
         a = min(100, a + step)
-    elif action == "dec":
+        await state.update_data(age=a)
+        await cb.message.edit_text(
+            f"Возраст: {a} лет\nНастрой кнопками и нажми «Готово».",
+            reply_markup=stepper_kb("a", a, [1, 2, 5], "лет", True),
+        )
+        await cb.answer()
+        return
+
+    if action == "dec":
+        step = int(float(parts[2]))
         a = max(10, a - step)
-    elif action == "ok":
+        await state.update_data(age=a)
+        await cb.message.edit_text(
+            f"Возраст: {a} лет\nНастрой кнопками и нажми «Готово».",
+            reply_markup=stepper_kb("a", a, [1, 2, 5], "лет", True),
+        )
+        await cb.answer()
+        return
+
+    if action == "ok":
+        # сохраняем возраст
         async with await get_session(settings.database_url) as session:
             res = await session.exec(select(User).where(User.tg_id == cb.from_user.id))
             user = res.first()
             user.age = a
             await session.commit()
 
-        # Показать сводку и спросить подтверждение
+        # показать сводку
         async with await get_session(settings.database_url) as session:
             res = await session.exec(select(User).where(User.tg_id == cb.from_user.id))
             user = res.first()
