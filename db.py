@@ -3,7 +3,16 @@ from sqlmodel import SQLModel, Field, Relationship
 from sqlmodel.ext.asyncio.session import AsyncSession
 from sqlalchemy.ext.asyncio import AsyncEngine, create_async_engine
 
-# МОДЕЛИ
+# ===== МОДЕЛИ =====
+
+class User(SQLModel, table=True):
+    id: Optional[int] = Field(default=None, primary_key=True)
+    tg_id: int = Field(index=True, unique=True)
+    gender: Optional[str] = Field(default=None, description="male|female|other")
+    goal: Optional[str] = Field(default=None, description="lose_weight|gain_muscle|health|none")
+    weight_kg: Optional[float] = None
+    height_cm: Optional[int] = None
+    age: Optional[int] = None
 
 class MuscleGroup(SQLModel, table=True):
     id: Optional[int] = Field(default=None, primary_key=True)
@@ -25,21 +34,20 @@ class Exercise(SQLModel, table=True):
 
 class Workout(SQLModel, table=True):
     id: Optional[int] = Field(default=None, primary_key=True)
-    user_id: int
+    user_id: int = Field(foreign_key="user.id")
     title: str
 
 class WorkoutItem(SQLModel, table=True):
     id: Optional[int] = Field(default=None, primary_key=True)
     workout_id: int = Field(foreign_key="workout.id")
     exercise_id: int = Field(foreign_key="exercise.id")
-    # Параметры под силовые/кардио
     sets: Optional[int] = None
     reps: Optional[int] = None
     weight: Optional[float] = None
     duration_sec: Optional[int] = None
     distance_m: Optional[int] = None
 
-# АСИНХРОННЫЙ ДВИЖОК
+# ===== ДВИЖОК / СЕССИИ =====
 
 _engine: Optional[AsyncEngine] = None
 
