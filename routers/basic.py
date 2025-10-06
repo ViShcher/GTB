@@ -10,8 +10,6 @@ async def help_cmd(msg: Message):
     await msg.answer(
         "Доступно:\n"
         "/my_profile — посмотреть профиль\n"
-        "/add_ex <название> — добавить упражнение\n"
-        "/list_ex — список упражнений\n"
         "Или жми кнопки главного меню.",
         reply_markup=ReplyKeyboardRemove()
     )
