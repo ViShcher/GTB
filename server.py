@@ -8,7 +8,7 @@ from aiogram.types.bot_command_scope import (
 
 from config import settings
 from db import init_db
-from routers import basic_router, workouts_router
+from routers import basic_router, workouts_router, profile_router
 
 app = FastAPI()
 
@@ -22,7 +22,7 @@ bot = Bot(settings.bot_token)
 dp = Dispatcher()
 dp.include_router(basic_router)
 dp.include_router(workouts_router)
-
+dp.include_router(profile_router)
 
 @app.on_event("startup")
 async def on_startup():
@@ -32,20 +32,21 @@ async def on_startup():
     # Инициализация БД
     await init_db(settings.database_url)
 
-    # Сброс старых команд во всех дефолтных скоупах
+    # ======== Блок установки команд ========
     await bot.delete_my_commands(scope=BotCommandScopeDefault())
     await bot.delete_my_commands(scope=BotCommandScopeAllPrivateChats())
 
-    # Установка актуальных команд
     await bot.set_my_commands(
         commands=[
-            BotCommand(command="start", description="Запуск бота"),
+            BotCommand(command="start", description="Запуск бота / онбординг"),
             BotCommand(command="help", description="Справка по командам"),
-            BotCommand(command="add_ex", description="Добавить упражнение"),
+            BotCommand(command="my_profile", description="Мой профиль"),
             BotCommand(command="list_ex", description="Список упражнений"),
+            BotCommand(command="add_ex", description="Добавить упражнение"),
         ],
         scope=BotCommandScopeAllPrivateChats(),
     )
+    # ======== Конец блока команд ========
 
     # Сброс кастомной кнопки меню на стандартную
     await bot.set_chat_menu_button(menu_button=MenuButtonDefault())
