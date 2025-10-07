@@ -222,8 +222,11 @@ async def choose_group(cb: CallbackQuery, state: FSMContext):
     group_id = None if raw == "all" else int(raw)
     exercises, total = await _fetch_exercises(group_id, page=0)
     await state.update_data(group_id=group_id, ex_page=0)
-    await safe_edit_text(cb.message, "Выбери упражнение:",
-        reply_markup=_exercise_buttons(exercises, page=0, total=total, group_id=group_id))
+    await safe_edit_text(
+        cb.message,
+        "Выбери упражнение:",
+        reply_markup=_exercise_buttons(exercises, page=0, total=total, group_id=group_id),
+    )
     await state.set_state(Training.choose_exercise)
 
 
@@ -238,9 +241,11 @@ async def pick_exercise(cb: CallbackQuery, state: FSMContext):
     reps, weight = 10, 0.0
     saved = await _count_sets(workout_id, ex_id)
     await state.update_data(ex_id=ex_id, reps=reps, weight=weight)
-    await safe_edit_text(cb.message,
+    await safe_edit_text(
+        cb.message,
         _set_card_text(ex, reps, weight, saved_sets=saved),
-        reply_markup=_set_card_kb(reps, weight))
+        reply_markup=_set_card_kb(reps, weight),
+    )
     await state.set_state(Training.log_set)
 
 
@@ -275,13 +280,15 @@ async def weight_picker_actions(cb, state):
     if action == "ok":
         reps = int(data.get("reps", 10))
         weight = float(data.get("_tmp_weight", cur))
-        await state.update_data(weight=round(weight,1))
+        await state.update_data(weight=round(weight, 1))
         async with await get_session(settings.database_url) as session:
             ex = await session.get(Exercise, data["ex_id"])
         saved = await _count_sets(int(data["workout_id"]), int(data["ex_id"]))
-        await safe_edit_text(cb.message,
+        await safe_edit_text(
+            cb.message,
             _set_card_text(ex, reps, weight, saved_sets=saved),
-            reply_markup=_set_card_kb(reps, weight))
+            reply_markup=_set_card_kb(reps, weight),
+        )
         await cb.answer("Применено")
         return
 
@@ -291,9 +298,11 @@ async def weight_picker_actions(cb, state):
         async with await get_session(settings.database_url) as session:
             ex = await session.get(Exercise, data["ex_id"])
         saved = await _count_sets(int(data["workout_id"]), int(data["ex_id"]))
-        await safe_edit_text(cb.message,
+        await safe_edit_text(
+            cb.message,
             _set_card_text(ex, reps, weight, saved_sets=saved),
-            reply_markup=_set_card_kb(reps, weight))
+            reply_markup=_set_card_kb(reps, weight),
+        )
         await cb.answer()
 
 
@@ -332,9 +341,11 @@ async def reps_picker_actions(cb, state):
         async with await get_session(settings.database_url) as session:
             ex = await session.get(Exercise, data["ex_id"])
         saved = await _count_sets(int(data["workout_id"]), int(data["ex_id"]))
-        await safe_edit_text(cb.message,
+        await safe_edit_text(
+            cb.message,
             _set_card_text(ex, reps, weight, saved_sets=saved),
-            reply_markup=_set_card_kb(reps, weight))
+            reply_markup=_set_card_kb(reps, weight),
+        )
         await cb.answer("Применено")
         return
 
@@ -344,9 +355,11 @@ async def reps_picker_actions(cb, state):
         async with await get_session(settings.database_url) as session:
             ex = await session.get(Exercise, data["ex_id"])
         saved = await _count_sets(int(data["workout_id"]), int(data["ex_id"]))
-        await safe_edit_text(cb.message,
+        await safe_edit_text(
+            cb.message,
             _set_card_text(ex, reps, weight, saved_sets=saved),
-            reply_markup=_set_card_kb(reps, weight))
+            reply_markup=_set_card_kb(reps, weight),
+        )
         await cb.answer()
 
 
@@ -373,12 +386,30 @@ async def save_set(cb: CallbackQuery, state: FSMContext):
         ex = await session.get(Exercise, ex_id)
 
     saved = await _count_sets(workout_id, ex_id)
-    await safe_edit_text(cb.message,
+    await safe_edit_text(
+        cb.message,
         f"✅ Сохранено: <b>{_exercise_title(ex)}</b>\n"
         f"Подход: {reps} x {weight:.1f} кг\n"
         f"Сохранённых подходов: <b>{saved}</b>\n\n"
         "Можешь добавить ещё один подход или выбрать другое упражнение.",
-        reply_markup=_set_card_kb(reps, weight))
+        reply_markup=_set_card_kb(reps, weight),
+    )
+
+
+# ---------- вернуться к списку упражнений ----------
+@training_router.callback_query(F.data == "back:exercises", Training.log_set)
+async def back_to_exercises(cb: CallbackQuery, state: FSMContext):
+    await cb.answer()
+    data = await state.get_data()
+    group_id = data.get("group_id")
+    page = int(data.get("ex_page", 0))
+    exercises, total = await _fetch_exercises(group_id, page=page)
+    await safe_edit_text(
+        cb.message,
+        "Выбери упражнение:",
+        reply_markup=_exercise_buttons(exercises, page=page, total=total, group_id=group_id),
+    )
+    await state.set_state(Training.choose_exercise)
 
 
 # ---------- завершить ----------
@@ -388,14 +419,26 @@ async def finish_training(cb: CallbackQuery, state: FSMContext):
     data = await state.get_data()
     workout_id = int(data.get("workout_id") or 0)
     await state.clear()
+
     if not workout_id:
         await safe_edit_text(cb.message, "Тренировка завершена.")
         return
+
     async with await get_session(settings.database_url) as session:
         res = await session.exec(select(WorkoutItem).where(WorkoutItem.workout_id == workout_id))
         items = res.all()
+
     if not items:
         await safe_edit_text(cb.message, "Тренировка завершена. Сегодня подходов не сохранено.")
         return
+
     total_sets = len(items)
-    total_weight = sum((it.reps or 0) * (it.weight or
+    total_weight = sum((it.reps or 0) * (it.weight or 0.0) for it in items)
+
+    text = (
+        "🏁 Тренировка завершена.\n"
+        f"Подходов: <b>{total_sets}</b>\n"
+        f"Поднятый вес: <b>{total_weight:.1f} кг</b>\n"
+        "Сохранил. Возвращайся в меню."
+    )
+    await safe_edit_text(cb.message, text)
