@@ -14,8 +14,7 @@ from aiogram.types import (
     InlineKeyboardButton,
 )
 from aiogram.exceptions import TelegramBadRequest
-
-from sqlmodel import select
+from sqlmodel import select, func
 
 from config import settings
 from db import get_session, User, Workout, WorkoutItem, Exercise, MuscleGroup
@@ -32,16 +31,81 @@ class Training(StatesGroup):
 
 # ===================== Утилиты =====================
 async def safe_edit_text(msg, text: str, **kwargs):
-    """
-    Безопасная замена edit_text: игнорирует 'message is not modified',
-    чтобы Телеграм не ронял нам ошибку и не зависали колбэки.
-    """
+    """edit_text, который игнорирует 'message is not modified'."""
     try:
         return await msg.edit_text(text, **kwargs)
     except TelegramBadRequest as e:
         if "message is not modified" in str(e).lower():
             return
         raise
+
+
+async def _get_user(tg_id: int) -> Optional[User]:
+    async with await get_session(settings.database_url) as session:
+        res = await session.exec(select(User).where(User.tg_id == tg_id))
+        return res.first()
+
+
+async def _start_new_workout(tg_id: int) -> int:
+    """Создаёт НОВЫЙ workout для каждой сессии /train и возвращает его id."""
+    async with await get_session(settings.database_url) as session:
+        res = await session.exec(select(User).where(User.tg_id == tg_id))
+        user = res.first()
+        if not user:
+            raise RuntimeError("NO_USER")
+        title = datetime.now().strftime("%Y-%m-%d %H:%M")
+        w = Workout(user_id=user.id, title=title)
+        session.add(w)
+        await session.commit()
+        await session.refresh(w)
+        return w.id
+
+
+async def _fetch_groups() -> List[MuscleGroup]:
+    async with await get_session(settings.database_url) as session:
+        res = await session.exec(select(MuscleGroup).order_by(MuscleGroup.name))
+        return res.all()
+
+
+async def _fetch_exercises(group_id: Optional[int], page: int = 0, per_page: int = 10):
+    async with await get_session(settings.database_url) as session:
+        if group_id is None:
+            total = (await session.exec(select(Exercise))).all()
+            total_n = len(total)
+            res = await session.exec(
+                select(Exercise).order_by(Exercise.id.desc()).offset(page * per_page).limit(per_page)
+            )
+        else:
+            base = select(Exercise).where(Exercise.primary_muscle_id == group_id)
+            total_n = len((await session.exec(base)).all())
+            res = await session.exec(base.order_by(Exercise.id.desc()).offset(page * per_page).limit(per_page))
+        items = res.all()
+        return items, total_n
+
+
+async def _count_sets(workout_id: int, exercise_id: int) -> int:
+    async with await get_session(settings.database_url) as session:
+        res = await session.exec(
+            select(func.count(WorkoutItem.id)).where(
+                WorkoutItem.workout_id == workout_id,
+                WorkoutItem.exercise_id == exercise_id,
+            )
+        )
+        return int(res.one())
+
+
+def _exercise_title(ex: Exercise) -> str:
+    return f"{ex.name} [{ex.type}]"
+
+
+def _set_card_text(ex: Exercise, reps: int, weight: float, saved_sets: int) -> str:
+    return (
+        f"<b>{_exercise_title(ex)}</b>\n"
+        f"Повторы: <b>{reps}</b>\n"
+        f"Вес: <b>{weight:.1f} кг</b>\n"
+        f"Сохранённых подходов: <b>{saved_sets}</b>\n"
+        "Настрой кнопками ниже и нажми «Сохранить подход»."
+    )
 
 
 # ===================== Клавиатуры =====================
@@ -83,6 +147,7 @@ def _exercise_buttons(exercises: List[Exercise], page: int, total: int, group_id
 
 
 def _set_card_kb(reps: int, weight: float) -> InlineKeyboardMarkup:
+    # сохраняем «Сохранить подход» активным всегда, чтобы можно было записывать одинаковые подряд
     rows = [
         [
             InlineKeyboardButton(text="−5", callback_data="rep:-:5"),
@@ -109,96 +174,6 @@ def _set_card_kb(reps: int, weight: float) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
-def _set_card_kb_saved(reps: int, weight: float) -> InlineKeyboardMarkup:
-    # После сохранения меняем “Сохранить” на “Сохранено” (noop), чтобы не было дабл-тапов
-    return InlineKeyboardMarkup(inline_keyboard=[
-        [
-            InlineKeyboardButton(text="−5", callback_data="rep:-:5"),
-            InlineKeyboardButton(text="−2", callback_data="rep:-:2"),
-            InlineKeyboardButton(text="−1", callback_data="rep:-:1"),
-            InlineKeyboardButton(text="+1", callback_data="rep:+:1"),
-            InlineKeyboardButton(text="+2", callback_data="rep:+:2"),
-            InlineKeyboardButton(text="+5", callback_data="rep:+:5"),
-        ],
-        [
-            InlineKeyboardButton(text="−10 кг", callback_data="wt:-:10"),
-            InlineKeyboardButton(text="−5 кг", callback_data="wt:-:5"),
-            InlineKeyboardButton(text="−2.5 кг", callback_data="wt:-:2.5"),
-            InlineKeyboardButton(text="+2.5 кг", callback_data="wt:+:2.5"),
-            InlineKeyboardButton(text="+5 кг", callback_data="wt:+:5"),
-            InlineKeyboardButton(text="+10 кг", callback_data="wt:+:10"),
-        ],
-        [InlineKeyboardButton(text="✅ Сохранено", callback_data="noop")],
-        [
-            InlineKeyboardButton(text="➕ Следующее упражнение", callback_data="back:exercises"),
-            InlineKeyboardButton(text="🏁 Завершить тренировку", callback_data="finish"),
-        ],
-    ])
-
-
-# ===================== Данные =====================
-async def _get_user(tg_id: int) -> Optional[User]:
-    async with await get_session(settings.database_url) as session:
-        res = await session.exec(select(User).where(User.tg_id == tg_id))
-        return res.first()
-
-
-async def _ensure_user_and_workout(tg_id: int) -> int:
-    """Возвращает активный workout_id пользователя на сегодня, исключение если юзер отсутствует."""
-    async with await get_session(settings.database_url) as session:
-        res = await session.exec(select(User).where(User.tg_id == tg_id))
-        user = res.first()
-        if not user:
-            raise RuntimeError("NO_USER")
-
-        title = datetime.now().strftime("%Y-%m-%d")
-        res = await session.exec(
-            select(Workout).where(Workout.user_id == user.id, Workout.title == title)
-        )
-        w = res.first()
-        if not w:
-            w = Workout(user_id=user.id, title=title)
-            session.add(w)
-            await session.commit()
-            await session.refresh(w)
-        return w.id
-
-
-async def _fetch_groups() -> List[MuscleGroup]:
-    async with await get_session(settings.database_url) as session:
-        res = await session.exec(select(MuscleGroup).order_by(MuscleGroup.name))
-        return res.all()
-
-
-async def _fetch_exercises(group_id: Optional[int], page: int = 0, per_page: int = 10):
-    async with await get_session(settings.database_url) as session:
-        if group_id is None:
-            total = (await session.exec(select(Exercise))).all()
-            total_n = len(total)
-            res = await session.exec(
-                select(Exercise).order_by(Exercise.id.desc()).offset(page * per_page).limit(per_page)
-            )
-        else:
-            base = select(Exercise).where(Exercise.primary_muscle_id == group_id)
-            total_n = len((await session.exec(base)).all())
-            res = await session.exec(base.order_by(Exercise.id.desc()).offset(page * per_page).limit(per_page))
-        items = res.all()
-        return items, total_n
-
-
-def _exercise_title(ex: Exercise) -> str:
-    return f"{ex.name} [{ex.type}]"
-
-
-def _set_card_text(ex: Exercise, reps: int, weight: float) -> str:
-    return (
-        f"<b>{_exercise_title(ex)}</b>\n"
-        f"Повторы: <b>{reps}</b>\n"
-        f"Вес: <b>{weight:.1f} кг</b>\n"
-        "Настрой кнопками ниже и нажми «Сохранить подход»."
-    )
-
-
 # ===================== Основные хэндлеры =====================
 @training_router.message(Command("train"))
 @training_router.message(F.text == "🏋️ Тренировка")
@@ -208,18 +183,17 @@ async def start_training(msg: Message, state: FSMContext):
         await msg.answer("Сначала заполните профиль: нажмите /start и пройдите мини-мастер.")
         return
 
-    await _ensure_user_and_workout(msg.from_user.id)
+    # новая сессия тренировки каждый раз
+    workout_id = await _start_new_workout(msg.from_user.id)
+    await state.clear()
+    await state.update_data(workout_id=workout_id)
+
     groups = await _fetch_groups()
     await msg.answer(
         "Выбери группу мышц (или все упражнения):",
         reply_markup=_group_buttons(groups),
     )
     await state.set_state(Training.choose_group)
-
-
-@training_router.callback_query(F.data == "noop")
-async def noop_cb(cb: CallbackQuery):
-    await cb.answer("Уже сохранено")
 
 
 @training_router.callback_query(F.data.startswith("grp:"), Training.choose_group)
@@ -269,6 +243,9 @@ async def back_to_groups(cb: CallbackQuery, state: FSMContext):
 async def pick_exercise(cb: CallbackQuery, state: FSMContext):
     await cb.answer()
     ex_id = int(cb.data.split(":", 1)[1])
+    data = await state.get_data()
+    workout_id = int(data["workout_id"])
+
     async with await get_session(settings.database_url) as session:
         ex = await session.get(Exercise, ex_id)
     if not ex:
@@ -276,10 +253,12 @@ async def pick_exercise(cb: CallbackQuery, state: FSMContext):
         return
 
     reps, weight = 10, 0.0
-    await state.update_data(ex_id=ex_id, reps=reps, weight=weight, last_saved=None)
+    saved = await _count_sets(workout_id, ex_id)
+    await state.update_data(ex_id=ex_id, reps=reps, weight=weight)
+
     await safe_edit_text(
         cb.message,
-        _set_card_text(ex, reps, weight),
+        _set_card_text(ex, reps, weight, saved_sets=saved),
         reply_markup=_set_card_kb(reps, weight),
     )
     await state.set_state(Training.log_set)
@@ -295,16 +274,17 @@ async def change_reps(cb: CallbackQuery, state: FSMContext):
     weight = float(data.get("weight", 0.0))
     step = int(float(step_raw))
     new_reps = max(1, reps + step if sign == "+" else reps - step)
-
     if new_reps == reps:
         return
+    await state.update_data(reps=new_reps)
 
-    await state.update_data(reps=new_reps, last_saved=None)
     async with await get_session(settings.database_url) as session:
         ex = await session.get(Exercise, data["ex_id"])
+    # счётчик не меняем при настройке
+    saved = await _count_sets(int(data["workout_id"]), int(data["ex_id"]))
     await safe_edit_text(
         cb.message,
-        _set_card_text(ex, new_reps, weight),
+        _set_card_text(ex, new_reps, weight, saved_sets=saved),
         reply_markup=_set_card_kb(new_reps, weight),
     )
 
@@ -320,16 +300,16 @@ async def change_weight(cb: CallbackQuery, state: FSMContext):
     step = float(step_raw)
     new_weight = max(0.0, weight + step if sign == "+" else weight - step)
     new_weight = round(new_weight, 1)
-
     if new_weight == round(weight, 1):
         return
+    await state.update_data(weight=new_weight)
 
-    await state.update_data(weight=new_weight, last_saved=None)
     async with await get_session(settings.database_url) as session:
         ex = await session.get(Exercise, data["ex_id"])
+    saved = await _count_sets(int(data["workout_id"]), int(data["ex_id"]))
     await safe_edit_text(
         cb.message,
-        _set_card_text(ex, reps, new_weight),
+        _set_card_text(ex, reps, new_weight, saved_sets=saved),
         reply_markup=_set_card_kb(reps, new_weight),
     )
 
@@ -338,29 +318,10 @@ async def change_weight(cb: CallbackQuery, state: FSMContext):
 async def save_set(cb: CallbackQuery, state: FSMContext):
     await cb.answer("Сохраняю…")
     data = await state.get_data()
+    workout_id = int(data["workout_id"])
     ex_id = int(data["ex_id"])
     reps = int(data.get("reps", 10))
     weight = float(data.get("weight", 0.0))
-
-    # Идемпотентность: блокируем повторное сохранение того же набора
-    fingerprint = f"{ex_id}:{reps}:{weight:.1f}"
-    if data.get("last_saved") == fingerprint:
-        async with await get_session(settings.database_url) as session:
-            ex = await session.get(Exercise, ex_id)
-        await safe_edit_text(
-            cb.message,
-            f"✅ Сохранено: <b>{_exercise_title(ex)}</b>\n"
-            f"Подход: {reps} x {weight:.1f} кг\n\n"
-            "Можешь добавить ещё один подход или выбрать другое упражнение.",
-            reply_markup=_set_card_kb_saved(reps, weight),
-        )
-        return
-
-    try:
-        workout_id = await _ensure_user_and_workout(cb.from_user.id)
-    except RuntimeError:
-        await safe_edit_text(cb.message, "Сначала пройди онбординг: /start")
-        return
 
     async with await get_session(settings.database_url) as session:
         item = WorkoutItem(
@@ -374,14 +335,16 @@ async def save_set(cb: CallbackQuery, state: FSMContext):
         await session.commit()
         ex = await session.get(Exercise, ex_id)
 
-    await state.update_data(last_saved=fingerprint)
+    # обновлённый счётчик — теперь контент меняется, телеграм не ругается
+    saved = await _count_sets(workout_id, ex_id)
 
     await safe_edit_text(
         cb.message,
         f"✅ Сохранено: <b>{_exercise_title(ex)}</b>\n"
-        f"Подход: {reps} x {weight:.1f} кг\n\n"
+        f"Подход: {reps} x {weight:.1f} кг\n"
+        f"Сохранённых подходов: <b>{saved}</b>\n\n"
         "Можешь добавить ещё один подход или выбрать другое упражнение.",
-        reply_markup=_set_card_kb_saved(reps, weight),
+        reply_markup=_set_card_kb(reps, weight),
     )
 
 
@@ -403,10 +366,11 @@ async def back_to_exercises(cb: CallbackQuery, state: FSMContext):
 @training_router.callback_query(F.data == "finish")
 async def finish_training(cb: CallbackQuery, state: FSMContext):
     await cb.answer("Завершаем…")
+    data = await state.get_data()
+    workout_id = int(data.get("workout_id") or 0)
     await state.clear()
-    try:
-        workout_id = await _ensure_user_and_workout(cb.from_user.id)
-    except RuntimeError:
+
+    if not workout_id:
         await safe_edit_text(cb.message, "Тренировка завершена.")
         return
 
@@ -419,12 +383,12 @@ async def finish_training(cb: CallbackQuery, state: FSMContext):
         return
 
     total_sets = len(items)
-    total_tonnage = sum((it.reps or 0) * (it.weight or 0) for it in items)
+    total_weight = sum((it.reps or 0) * (it.weight or 0) for it in items)
 
     text = (
         "🏁 Тренировка завершена.\n"
         f"Подходов: <b>{total_sets}</b>\n"
-        f"Тоннаж (повторы×вес): <b>{total_tonnage:.1f} кг</b>\n"
+        f"Поднятый вес: <b>{total_weight:.1f} кг</b>\n"
         "Сохранил. Возвращайся в меню."
     )
     await safe_edit_text(cb.message, text)
