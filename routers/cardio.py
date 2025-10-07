@@ -15,7 +15,7 @@ from aiogram.exceptions import TelegramBadRequest
 from sqlmodel import select
 
 from config import settings
-from db import get_session, User, Workout, WorkoutItem, Exercise
+from db import get_session, User, Workout, WorkoutItem, Exercise, MuscleGroup
 
 cardio_router = Router()
 
@@ -27,11 +27,11 @@ class Cardio(StatesGroup):
 # ===================== Константы =====================
 SKIPPING_NAME = "Скакалка"  # кардио, где вводим только время
 DEFAULT_CARDIO = [
-    "Беговая дорожка",
-    "Велотренажёр",
-    "Эллиптический тренажёр",
-    "Гребной тренажёр",
-    SKIPPING_NAME,
+    ("Беговая дорожка", "treadmill"),
+    ("Велотренажёр", "bike"),
+    ("Эллиптический тренажёр", "elliptical"),
+    ("Гребной тренажёр", "rower"),
+    (SKIPPING_NAME, "jump_rope"),
 ]
 
 # ===================== Утилиты БД =====================
@@ -54,11 +54,24 @@ async def _get_or_create_workout(tg_id: int) -> int:
         return w.id
 
 async def _ensure_default_cardio():
-    """Создаём кардио-упражнения по умолчанию, если их нет (включая 'Скакалка')."""
+    """Создаём кардио-упражнения по умолчанию (со slug и привязкой к группе 'cardio')."""
     async with await get_session(settings.database_url) as session:
         res = await session.exec(select(Exercise).where(Exercise.type == "cardio"))
-        have = {e.name for e in res.all()}
-        to_add = [Exercise(name=n, type="cardio") for n in DEFAULT_CARDIO if n not in have]
+        existing = res.all()
+        have_slugs = {e.slug for e in existing if getattr(e, "slug", None)}
+
+        # найдём id группы 'cardio' (по slug, на всякий случай — по имени)
+        mg = await session.exec(select(MuscleGroup).where(MuscleGroup.slug == "cardio"))
+        group = mg.first()
+        if not group:
+            mg = await session.exec(select(MuscleGroup).where(MuscleGroup.name == "Кардио"))
+            group = mg.first()
+        group_id = group.id if group else None
+
+        to_add = []
+        for name, slug in DEFAULT_CARDIO:
+            if slug not in have_slugs:
+                to_add.append(Exercise(name=name, slug=slug, type="cardio", primary_muscle_id=group_id))
         if to_add:
             for e in to_add:
                 session.add(e)
