@@ -1,20 +1,16 @@
-import asyncio
 from aiogram import Bot, Dispatcher
 from aiogram.client.default import DefaultBotProperties
 from aiogram.enums import ParseMode
 
-from routers import basic_router, workouts_router
+from routers import basic_router, profile_router, training_router
 from config import settings
 from db import init_db
 
-bot = Bot(
-    token=settings.bot_token,
-    default=DefaultBotProperties(parse_mode=ParseMode.HTML),
-)
+bot = Bot(token=settings.bot_token, default=DefaultBotProperties(parse_mode=ParseMode.HTML))
 dp = Dispatcher()
-
+dp.include_router(profile_router)
+dp.include_router(training_router)
 dp.include_router(basic_router)
-dp.include_router(workouts_router)
 
 async def on_startup():
     await init_db(settings.database_url)
