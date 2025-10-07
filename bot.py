@@ -1,4 +1,3 @@
-
 import asyncio
 from aiogram import Bot, Dispatcher
 from aiogram.enums import ParseMode
@@ -6,7 +5,7 @@ from aiogram.client.default import DefaultBotProperties
 
 from config import settings
 from db import init_db
-from routers import basic_router, profile_router, training_router
+from routers import basic_router, profile_router, training_router, cardio_router
 
 bot = Bot(
     token=settings.bot_token,
@@ -14,8 +13,8 @@ bot = Bot(
 )
 dp = Dispatcher()
 
-# порядок тот же, чтобы /start не перехватывался
 dp.include_router(profile_router)
+dp.include_router(cardio_router)
 dp.include_router(training_router)
 dp.include_router(basic_router)
 
