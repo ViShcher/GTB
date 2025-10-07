@@ -104,7 +104,7 @@ def _set_card_text(ex: Exercise, reps: int, weight: float, saved_sets: int) -> s
         f"Повторы: <b>{reps}</b>\n"
         f"Вес: <b>{weight:.1f} кг</b>\n"
         f"Сохранённых подходов: <b>{saved_sets}</b>\n\n"
-        "Ввод теперь ручной: пришли два числа через пробел — «вес повторы», пример: <b>75 10</b>."
+        "Ручной ввод формата <b>вес повторы</b>. Примеры: <b>75 10</b>, <b>75/10</b>, <b>82.5x6</b>."
     )
 
 
@@ -203,7 +203,8 @@ async def pick_exercise(cb: CallbackQuery, state: FSMContext):
 
 
 # ---------- Ручной ввод "вес повторы" ----------
-MANUAL_PATTERN = re.compile(r"^\s*(\d+(?:[.,]\d+)?)\s+(\d+)\s*$")
+# Разделитель может быть пробелом, "/", "x" / "X", "*", ",", ":", "-" (один из)
+MANUAL_PATTERN = re.compile(r"^\s*(\d+(?:[.,]\d+)?)(?:\s+|[xX\*\/,:-])\s*(\d+)\s*$")
 
 @training_router.message(Training.log_set, F.text.regexp(MANUAL_PATTERN))
 async def manual_input(msg: Message, state: FSMContext):
@@ -267,7 +268,7 @@ async def save_set(cb: CallbackQuery, state: FSMContext):
         f"✅ Сохранено: <b>{_exercise_title(ex)}</b>\n"
         f"Подход: {reps} x {weight:.1f} кг\n"
         f"Сохранённых подходов: <b>{saved}</b>\n\n"
-        "Пришли новое значение формата <b>вес повторы</b> или выбери другое упражнение.",
+        "Пришли новое значение формата <b>вес повторы</b> (напр. 75/10) или выбери другое упражнение.",
         reply_markup=_set_card_kb(reps, weight),
     )
 
