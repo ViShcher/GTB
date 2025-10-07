@@ -13,6 +13,7 @@ from aiogram.types import (
     InlineKeyboardMarkup,
     InlineKeyboardButton,
 )
+from aiogram.exceptions import TelegramBadRequest
 
 from sqlmodel import select
 
@@ -27,6 +28,20 @@ class Training(StatesGroup):
     choose_group = State()
     choose_exercise = State()
     log_set = State()
+
+
+# ===================== Утилиты =====================
+async def safe_edit_text(msg, text: str, **kwargs):
+    """
+    Безопасная замена edit_text: игнорирует 'message is not modified',
+    чтобы Телеграм не ронял нам ошибку и не зависали колбэки.
+    """
+    try:
+        return await msg.edit_text(text, **kwargs)
+    except TelegramBadRequest as e:
+        if "message is not modified" in str(e).lower():
+            return
+        raise
 
 
 # ===================== Клавиатуры =====================
@@ -94,7 +109,34 @@ def _set_card_kb(reps: int, weight: float) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
-# ===================== Утилиты =====================
+def _set_card_kb_saved(reps: int, weight: float) -> InlineKeyboardMarkup:
+    # После сохранения меняем “Сохранить” на “Сохранено” (noop), чтобы не было дабл-тапов
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [
+            InlineKeyboardButton(text="−5", callback_data="rep:-:5"),
+            InlineKeyboardButton(text="−2", callback_data="rep:-:2"),
+            InlineKeyboardButton(text="−1", callback_data="rep:-:1"),
+            InlineKeyboardButton(text="+1", callback_data="rep:+:1"),
+            InlineKeyboardButton(text="+2", callback_data="rep:+:2"),
+            InlineKeyboardButton(text="+5", callback_data="rep:+:5"),
+        ],
+        [
+            InlineKeyboardButton(text="−10 кг", callback_data="wt:-:10"),
+            InlineKeyboardButton(text="−5 кг", callback_data="wt:-:5"),
+            InlineKeyboardButton(text="−2.5 кг", callback_data="wt:-:2.5"),
+            InlineKeyboardButton(text="+2.5 кг", callback_data="wt:+:2.5"),
+            InlineKeyboardButton(text="+5 кг", callback_data="wt:+:5"),
+            InlineKeyboardButton(text="+10 кг", callback_data="wt:+:10"),
+        ],
+        [InlineKeyboardButton(text="✅ Сохранено", callback_data="noop")],
+        [
+            InlineKeyboardButton(text="➕ Следующее упражнение", callback_data="back:exercises"),
+            InlineKeyboardButton(text="🏁 Завершить тренировку", callback_data="finish"),
+        ],
+    ])
+
+
+# ===================== Данные =====================
 async def _get_user(tg_id: int) -> Optional[User]:
     async with await get_session(settings.database_url) as session:
         res = await session.exec(select(User).where(User.tg_id == tg_id))
@@ -175,6 +217,11 @@ async def start_training(msg: Message, state: FSMContext):
     await state.set_state(Training.choose_group)
 
 
+@training_router.callback_query(F.data == "noop")
+async def noop_cb(cb: CallbackQuery):
+    await cb.answer("Уже сохранено")
+
+
 @training_router.callback_query(F.data.startswith("grp:"), Training.choose_group)
 async def choose_group(cb: CallbackQuery, state: FSMContext):
     await cb.answer()
@@ -185,7 +232,8 @@ async def choose_group(cb: CallbackQuery, state: FSMContext):
     if total == 0:
         await cb.answer("В этой группе пока пусто.", show_alert=True)
         return
-    await cb.message.edit_text(
+    await safe_edit_text(
+        cb.message,
         "Выбери упражнение:",
         reply_markup=_exercise_buttons(exercises, page=0, total=total, group_id=group_id),
     )
@@ -209,7 +257,11 @@ async def paginate_exercises(cb: CallbackQuery, state: FSMContext):
 async def back_to_groups(cb: CallbackQuery, state: FSMContext):
     await cb.answer()
     groups = await _fetch_groups()
-    await cb.message.edit_text("Выбери группу мышц (или все упражнения):", reply_markup=_group_buttons(groups))
+    await safe_edit_text(
+        cb.message,
+        "Выбери группу мышц (или все упражнения):",
+        reply_markup=_group_buttons(groups),
+    )
     await state.set_state(Training.choose_group)
 
 
@@ -224,8 +276,9 @@ async def pick_exercise(cb: CallbackQuery, state: FSMContext):
         return
 
     reps, weight = 10, 0.0
-    await state.update_data(ex_id=ex_id, reps=reps, weight=weight)
-    await cb.message.edit_text(
+    await state.update_data(ex_id=ex_id, reps=reps, weight=weight, last_saved=None)
+    await safe_edit_text(
+        cb.message,
         _set_card_text(ex, reps, weight),
         reply_markup=_set_card_kb(reps, weight),
     )
@@ -241,12 +294,19 @@ async def change_reps(cb: CallbackQuery, state: FSMContext):
     reps = int(data.get("reps", 10))
     weight = float(data.get("weight", 0.0))
     step = int(float(step_raw))
-    reps = max(1, reps + step if sign == "+" else reps - step)
+    new_reps = max(1, reps + step if sign == "+" else reps - step)
 
-    await state.update_data(reps=reps)
+    if new_reps == reps:
+        return
+
+    await state.update_data(reps=new_reps, last_saved=None)
     async with await get_session(settings.database_url) as session:
         ex = await session.get(Exercise, data["ex_id"])
-    await cb.message.edit_text(_set_card_text(ex, reps, weight), reply_markup=_set_card_kb(reps, weight))
+    await safe_edit_text(
+        cb.message,
+        _set_card_text(ex, new_reps, weight),
+        reply_markup=_set_card_kb(new_reps, weight),
+    )
 
 
 @training_router.callback_query(F.data.startswith("wt:"), Training.log_set)
@@ -258,12 +318,20 @@ async def change_weight(cb: CallbackQuery, state: FSMContext):
     reps = int(data.get("reps", 10))
     weight = float(data.get("weight", 0.0))
     step = float(step_raw)
-    weight = max(0.0, weight + step if sign == "+" else weight - step)
+    new_weight = max(0.0, weight + step if sign == "+" else weight - step)
+    new_weight = round(new_weight, 1)
 
-    await state.update_data(weight=round(weight, 1))
+    if new_weight == round(weight, 1):
+        return
+
+    await state.update_data(weight=new_weight, last_saved=None)
     async with await get_session(settings.database_url) as session:
         ex = await session.get(Exercise, data["ex_id"])
-    await cb.message.edit_text(_set_card_text(ex, reps, round(weight, 1)), reply_markup=_set_card_kb(reps, round(weight, 1)))
+    await safe_edit_text(
+        cb.message,
+        _set_card_text(ex, reps, new_weight),
+        reply_markup=_set_card_kb(reps, new_weight),
+    )
 
 
 @training_router.callback_query(F.data == "save", Training.log_set)
@@ -273,10 +341,25 @@ async def save_set(cb: CallbackQuery, state: FSMContext):
     ex_id = int(data["ex_id"])
     reps = int(data.get("reps", 10))
     weight = float(data.get("weight", 0.0))
+
+    # Идемпотентность: блокируем повторное сохранение того же набора
+    fingerprint = f"{ex_id}:{reps}:{weight:.1f}"
+    if data.get("last_saved") == fingerprint:
+        async with await get_session(settings.database_url) as session:
+            ex = await session.get(Exercise, ex_id)
+        await safe_edit_text(
+            cb.message,
+            f"✅ Сохранено: <b>{_exercise_title(ex)}</b>\n"
+            f"Подход: {reps} x {weight:.1f} кг\n\n"
+            "Можешь добавить ещё один подход или выбрать другое упражнение.",
+            reply_markup=_set_card_kb_saved(reps, weight),
+        )
+        return
+
     try:
         workout_id = await _ensure_user_and_workout(cb.from_user.id)
     except RuntimeError:
-        await cb.message.edit_text("Сначала пройди онбординг: /start")
+        await safe_edit_text(cb.message, "Сначала пройди онбординг: /start")
         return
 
     async with await get_session(settings.database_url) as session:
@@ -291,11 +374,14 @@ async def save_set(cb: CallbackQuery, state: FSMContext):
         await session.commit()
         ex = await session.get(Exercise, ex_id)
 
-    await cb.message.edit_text(
+    await state.update_data(last_saved=fingerprint)
+
+    await safe_edit_text(
+        cb.message,
         f"✅ Сохранено: <b>{_exercise_title(ex)}</b>\n"
         f"Подход: {reps} x {weight:.1f} кг\n\n"
         "Можешь добавить ещё один подход или выбрать другое упражнение.",
-        reply_markup=_set_card_kb(reps, weight),
+        reply_markup=_set_card_kb_saved(reps, weight),
     )
 
 
@@ -306,7 +392,8 @@ async def back_to_exercises(cb: CallbackQuery, state: FSMContext):
     group_id = data.get("group_id")
     page = int(data.get("ex_page", 0))
     exercises, total = await _fetch_exercises(group_id, page=page)
-    await cb.message.edit_text(
+    await safe_edit_text(
+        cb.message,
         "Выбери упражнение:",
         reply_markup=_exercise_buttons(exercises, page=page, total=total, group_id=group_id),
     )
@@ -320,7 +407,7 @@ async def finish_training(cb: CallbackQuery, state: FSMContext):
     try:
         workout_id = await _ensure_user_and_workout(cb.from_user.id)
     except RuntimeError:
-        await cb.message.edit_text("Тренировка завершена.")
+        await safe_edit_text(cb.message, "Тренировка завершена.")
         return
 
     async with await get_session(settings.database_url) as session:
@@ -328,7 +415,7 @@ async def finish_training(cb: CallbackQuery, state: FSMContext):
         items = res.all()
 
     if not items:
-        await cb.message.edit_text("Тренировка завершена. Сегодня подходов не сохранено.")
+        await safe_edit_text(cb.message, "Тренировка завершена. Сегодня подходов не сохранено.")
         return
 
     total_sets = len(items)
@@ -340,4 +427,4 @@ async def finish_training(cb: CallbackQuery, state: FSMContext):
         f"Тоннаж (повторы×вес): <b>{total_tonnage:.1f} кг</b>\n"
         "Сохранил. Возвращайся в меню."
     )
-    await cb.message.edit_text(text)
+    await safe_edit_text(cb.message, text)
