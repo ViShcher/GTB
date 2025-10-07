@@ -288,6 +288,14 @@ async def back_to_exercises(cb: CallbackQuery, state: FSMContext):
     )
     await state.set_state(Training.choose_exercise)
 
+# ---------- вернуться к списку групп ----------
+@training_router.callback_query(F.data == "back:groups", Training.choose_exercise)
+@training_router.callback_query(F.data == "back:groups", Training.log_set)
+async def back_to_groups(cb: CallbackQuery, state: FSMContext):
+    await cb.answer()
+    groups = await _fetch_groups()
+    await safe_edit_text(cb.message, "Выбери группу мышц:", reply_markup=_group_buttons(groups))
+    await state.set_state(Training.choose_group)
 
 # ---------- завершить ----------
 @training_router.callback_query(F.data == "finish")
