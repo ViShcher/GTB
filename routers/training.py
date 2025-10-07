@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from datetime import datetime
 from typing import Optional, List
+import re
 
 from aiogram import Router, F
 from aiogram.filters import Command
@@ -102,26 +103,12 @@ def _set_card_text(ex: Exercise, reps: int, weight: float, saved_sets: int) -> s
         f"<b>{_exercise_title(ex)}</b>\n"
         f"Повторы: <b>{reps}</b>\n"
         f"Вес: <b>{weight:.1f} кг</b>\n"
-        f"Сохранённых подходов: <b>{saved_sets}</b>\n"
-        "Настрой кнопками ниже и нажми «Сохранить подход»."
+        f"Сохранённых подходов: <b>{saved_sets}</b>\n\n"
+        "Ввод теперь ручной: пришли два числа через пробел — «вес повторы», пример: <b>75 10</b>."
     )
 
 
 # ===================== Клавиатуры =====================
-def _group_buttons(groups: List[MuscleGroup]) -> InlineKeyboardMarkup:
-    rows = []
-    row = []
-    for g in groups:
-        row.append(InlineKeyboardButton(text=g.name, callback_data=f"grp:{g.id}"))
-        if len(row) == 2:
-            rows.append(row)
-            row = []
-    if row:
-        rows.append(row)
-    rows.append([InlineKeyboardButton(text="🏁 Завершить тренировку", callback_data="finish")])
-    return InlineKeyboardMarkup(inline_keyboard=rows)
-
-
 def _exercise_buttons(exercises: List[Exercise], page: int, total: int, group_id: Optional[int]) -> InlineKeyboardMarkup:
     rows = []
     for ex in exercises:
@@ -140,28 +127,22 @@ def _exercise_buttons(exercises: List[Exercise], page: int, total: int, group_id
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
+def _group_buttons(groups: List[MuscleGroup]) -> InlineKeyboardMarkup:
+    rows = []
+    row = []
+    for g in groups:
+        row.append(InlineKeyboardButton(text=g.name, callback_data=f"grp:{g.id}"))
+        if len(row) == 2:
+            rows.append(row)
+            row = []
+    if row:
+        rows.append(row)
+    rows.append([InlineKeyboardButton(text="🏁 Завершить тренировку", callback_data="finish")])
+    return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
 def _set_card_kb(reps: int, weight: float) -> InlineKeyboardMarkup:
     rows = [
-        [
-            InlineKeyboardButton(text="−5", callback_data="rep:-:5"),
-            InlineKeyboardButton(text="−2", callback_data="rep:-:2"),
-            InlineKeyboardButton(text="−1", callback_data="rep:-:1"),
-            InlineKeyboardButton(text="+1", callback_data="rep:+:1"),
-            InlineKeyboardButton(text="+2", callback_data="rep:+:2"),
-            InlineKeyboardButton(text="+5", callback_data="rep:+:5"),
-        ],
-        [
-            InlineKeyboardButton(text="−10 кг", callback_data="wt:-:10"),
-            InlineKeyboardButton(text="−5 кг", callback_data="wt:-:5"),
-            InlineKeyboardButton(text="−2.5 кг", callback_data="wt:-:2.5"),
-            InlineKeyboardButton(text="+2.5 кг", callback_data="wt:+:2.5"),
-            InlineKeyboardButton(text="+5 кг", callback_data="wt:+:5"),
-            InlineKeyboardButton(text="+10 кг", callback_data="wt:+:10"),
-        ],
-        [
-            InlineKeyboardButton(text="⚡ Набор веса", callback_data="pick:weight"),
-            InlineKeyboardButton(text="⚡ Набор повторов", callback_data="pick:reps"),
-        ],
         [InlineKeyboardButton(text="✅ Сохранить подход", callback_data="save")],
         [
             InlineKeyboardButton(text="➕ Следующее упражнение", callback_data="back:exercises"),
@@ -169,34 +150,6 @@ def _set_card_kb(reps: int, weight: float) -> InlineKeyboardMarkup:
         ],
     ]
     return InlineKeyboardMarkup(inline_keyboard=rows)
-
-
-def _weight_picker_kb() -> InlineKeyboardMarkup:
-    return InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="2.5", callback_data="wp:+:2.5"),
-         InlineKeyboardButton(text="5", callback_data="wp:+:5"),
-         InlineKeyboardButton(text="10", callback_data="wp:+:10")],
-        [InlineKeyboardButton(text="−2.5", callback_data="wp:-:2.5"),
-         InlineKeyboardButton(text="−5", callback_data="wp:-:5"),
-         InlineKeyboardButton(text="−10", callback_data="wp:-:10")],
-        [InlineKeyboardButton(text="Очистить", callback_data="wp:clr"),
-         InlineKeyboardButton(text="Применить", callback_data="wp:ok"),
-         InlineKeyboardButton(text="← Назад", callback_data="wp:back")],
-    ])
-
-
-def _reps_picker_kb() -> InlineKeyboardMarkup:
-    return InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="+1", callback_data="rp:+:1"),
-         InlineKeyboardButton(text="+2", callback_data="rp:+:2"),
-         InlineKeyboardButton(text="+5", callback_data="rp:+:5")],
-        [InlineKeyboardButton(text="−1", callback_data="rp:-:1"),
-         InlineKeyboardButton(text="−2", callback_data="rp:-:2"),
-         InlineKeyboardButton(text="−5", callback_data="rp:-:5")],
-        [InlineKeyboardButton(text="Очистить", callback_data="rp:clr"),
-         InlineKeyboardButton(text="Применить", callback_data="rp:ok"),
-         InlineKeyboardButton(text="← Назад", callback_data="rp:back")],
-    ])
 
 
 # ===================== Основные хэндлеры =====================
@@ -240,7 +193,7 @@ async def pick_exercise(cb: CallbackQuery, state: FSMContext):
         ex = await session.get(Exercise, ex_id)
     reps, weight = 10, 0.0
     saved = await _count_sets(workout_id, ex_id)
-    await state.update_data(ex_id=ex_id, reps=reps, weight=weight)
+    await state.update_data(ex_id=ex_id, reps=reps, weight=weight, last_message_id=cb.message.message_id)
     await safe_edit_text(
         cb.message,
         _set_card_text(ex, reps, weight, saved_sets=saved),
@@ -249,118 +202,41 @@ async def pick_exercise(cb: CallbackQuery, state: FSMContext):
     await state.set_state(Training.log_set)
 
 
-# ---------- быстрый набор веса ----------
-@training_router.callback_query(F.data == "pick:weight", Training.log_set)
-async def open_weight_picker(cb, state):
-    await cb.answer()
+# ---------- Ручной ввод "вес повторы" ----------
+MANUAL_PATTERN = re.compile(r"^\s*(\d+(?:[.,]\d+)?)\s+(\d+)\s*$")
+
+@training_router.message(Training.log_set, F.text.regexp(MANUAL_PATTERN))
+async def manual_input(msg: Message, state: FSMContext):
+    m = MANUAL_PATTERN.match(msg.text)
+    weight_raw, reps_raw = m.group(1), m.group(2)
+    weight = float(weight_raw.replace(",", "."))
+    reps = max(1, int(reps_raw))
+
     data = await state.get_data()
-    await state.update_data(_tmp_weight=float(data.get("weight", 0.0)))
-    await safe_edit_text(cb.message, "⚡ Быстрый набор веса:", reply_markup=_weight_picker_kb())
-
-
-@training_router.callback_query(F.data.startswith("wp:"), Training.log_set)
-async def weight_picker_actions(cb, state):
-    parts = cb.data.split(":")
-    action = parts[1]
-    data = await state.get_data()
-    cur = float(data.get("_tmp_weight", data.get("weight", 0.0)))
-
-    if action in {"+", "-"}:
-        step = float(parts[2])
-        cur = max(0.0, cur + (step if action == "+" else -step))
-        await state.update_data(_tmp_weight=round(cur, 1))
-        await cb.answer(f"текущее: {cur:.1f} кг")
+    if not data or "ex_id" not in data:
+        await msg.answer("Сначала выбери упражнение.")
         return
 
-    if action == "clr":
-        await state.update_data(_tmp_weight=0.0)
-        await cb.answer("текущее: 0.0 кг")
-        return
+    await state.update_data(weight=weight, reps=reps)
 
-    if action == "ok":
-        reps = int(data.get("reps", 10))
-        weight = float(data.get("_tmp_weight", cur))
-        await state.update_data(weight=round(weight, 1))
-        async with await get_session(settings.database_url) as session:
-            ex = await session.get(Exercise, data["ex_id"])
-        saved = await _count_sets(int(data["workout_id"]), int(data["ex_id"]))
-        await safe_edit_text(
-            cb.message,
+    async with await get_session(settings.database_url) as session:
+        ex = await session.get(Exercise, data["ex_id"])
+    saved = await _count_sets(int(data["workout_id"]), int(data["ex_id"]))
+
+    # Обновим карточку упражнения, чтобы не размножать сообщения
+    try:
+        await msg.bot.edit_message_text(
+            chat_id=msg.chat.id,
+            message_id=int(data.get("last_message_id") or msg.message_id),
+            text=_set_card_text(ex, reps, weight, saved_sets=saved),
+            reply_markup=_set_card_kb(reps, weight),
+            parse_mode="HTML",
+        )
+    except TelegramBadRequest:
+        await msg.answer(
             _set_card_text(ex, reps, weight, saved_sets=saved),
             reply_markup=_set_card_kb(reps, weight),
         )
-        await cb.answer("Применено")
-        return
-
-    if action == "back":
-        reps = int(data.get("reps", 10))
-        weight = float(data.get("weight", 0.0))
-        async with await get_session(settings.database_url) as session:
-            ex = await session.get(Exercise, data["ex_id"])
-        saved = await _count_sets(int(data["workout_id"]), int(data["ex_id"]))
-        await safe_edit_text(
-            cb.message,
-            _set_card_text(ex, reps, weight, saved_sets=saved),
-            reply_markup=_set_card_kb(reps, weight),
-        )
-        await cb.answer()
-
-
-# ---------- быстрый набор повторов ----------
-@training_router.callback_query(F.data == "pick:reps", Training.log_set)
-async def open_reps_picker(cb, state):
-    await cb.answer()
-    data = await state.get_data()
-    await state.update_data(_tmp_reps=int(data.get("reps", 10)))
-    await safe_edit_text(cb.message, "⚡ Быстрый набор повторов:", reply_markup=_reps_picker_kb())
-
-
-@training_router.callback_query(F.data.startswith("rp:"), Training.log_set)
-async def reps_picker_actions(cb, state):
-    parts = cb.data.split(":")
-    action = parts[1]
-    data = await state.get_data()
-    cur = int(data.get("_tmp_reps", data.get("reps", 10)))
-
-    if action in {"+", "-"}:
-        step = int(parts[2])
-        cur = max(1, cur + (step if action == "+" else -step))
-        await state.update_data(_tmp_reps=cur)
-        await cb.answer(f"текущее: {cur} повт.")
-        return
-
-    if action == "clr":
-        await state.update_data(_tmp_reps=1)
-        await cb.answer("текущее: 1 повт.")
-        return
-
-    if action == "ok":
-        reps = int(data.get("_tmp_reps", cur))
-        weight = float(data.get("weight", 0.0))
-        await state.update_data(reps=reps)
-        async with await get_session(settings.database_url) as session:
-            ex = await session.get(Exercise, data["ex_id"])
-        saved = await _count_sets(int(data["workout_id"]), int(data["ex_id"]))
-        await safe_edit_text(
-            cb.message,
-            _set_card_text(ex, reps, weight, saved_sets=saved),
-            reply_markup=_set_card_kb(reps, weight),
-        )
-        await cb.answer("Применено")
-        return
-
-    if action == "back":
-        reps = int(data.get("reps", 10))
-        weight = float(data.get("weight", 0.0))
-        async with await get_session(settings.database_url) as session:
-            ex = await session.get(Exercise, data["ex_id"])
-        saved = await _count_sets(int(data["workout_id"]), int(data["ex_id"]))
-        await safe_edit_text(
-            cb.message,
-            _set_card_text(ex, reps, weight, saved_sets=saved),
-            reply_markup=_set_card_kb(reps, weight),
-        )
-        await cb.answer()
 
 
 # ---------- сохранить подход ----------
@@ -391,7 +267,7 @@ async def save_set(cb: CallbackQuery, state: FSMContext):
         f"✅ Сохранено: <b>{_exercise_title(ex)}</b>\n"
         f"Подход: {reps} x {weight:.1f} кг\n"
         f"Сохранённых подходов: <b>{saved}</b>\n\n"
-        "Можешь добавить ещё один подход или выбрать другое упражнение.",
+        "Пришли новое значение формата <b>вес повторы</b> или выбери другое упражнение.",
         reply_markup=_set_card_kb(reps, weight),
     )
 
