@@ -7,7 +7,7 @@ from aiogram.client.default import DefaultBotProperties
 from config import settings
 from db import init_db
 from seed_data import ensure_seed_data
-from routers import basic_router, profile_router, training_router
+from routers import basic_router, profile_router, training_router, cardio_router
 
 app = FastAPI()
 
@@ -21,7 +21,9 @@ bot = Bot(
 )
 dp = Dispatcher()
 
+# порядок важен: cardio до training
 dp.include_router(profile_router)
+dp.include_router(cardio_router)
 dp.include_router(training_router)
 dp.include_router(basic_router)
 
@@ -31,22 +33,18 @@ async def on_startup():
         raise RuntimeError("BOT_TOKEN не задан")
     await init_db(settings.database_url)
     await ensure_seed_data()
-
     await bot.delete_my_commands()
-    await bot.set_my_commands(
-        commands=[
-            BotCommand(command="start", description="Запуск бота / онбординг"),
-            BotCommand(command="help", description="Справка по командам"),
-            BotCommand(command="my_profile", description="Мой профиль"),
-            BotCommand(command="train", description="Начать тренировку"),
-        ]
-    )
+    await bot.set_my_commands([
+        BotCommand(command="start", description="Онбординг"),
+        BotCommand(command="train", description="Начать тренировку"),
+        BotCommand(command="cardio", description="Кардио-режим"),
+        BotCommand(command="my_profile", description="Мой профиль"),
+    ])
     await bot.set_chat_menu_button(menu_button=MenuButtonDefault())
     await bot.set_webhook(settings.webhook_url, drop_pending_updates=True)
 
 @app.on_event("shutdown")
 async def on_shutdown():
-    # аккуратно закрываем HTTP-сессию aiogram, чтобы не было Unclosed client session
     await bot.session.close()
 
 @app.post(f"/{settings.webhook_path.strip('/')}")
