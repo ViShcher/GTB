@@ -1,89 +1,67 @@
-from typing import List, Tuple
+# seed_data.py — идемпотентное наполнение БД базовыми группами и упражнениями
 from sqlmodel import select
-from db import MuscleGroup, Exercise, get_session
+from db import get_session, MuscleGroup, Exercise
 from config import settings
 
-# Базовые группы
-GROUPS: List[Tuple[str, str]] = [
-    ("Грудь", "chest"),
-    ("Спина", "back"),
-    ("Ноги", "legs"),
-    ("Плечи", "shoulders"),
-    ("Руки", "arms"),
-    ("Пресс", "abs"),
-    ("Кардио", "cardio"),
+# Базовые группы (slug -> имя)
+DEFAULT_GROUPS = [
+    ("chest", "Грудь"),
+    ("back", "Спина"),
+    ("legs", "Ноги"),
+    ("shoulders", "Плечи"),
+    ("biceps", "Бицепс"),
+    ("triceps", "Трицепс"),
+    ("core", "Кор"),
+    ("cardio", "Кардио"),
 ]
 
-# Упражнения: name, slug, type, group_slug, tip
-EXERCISES: List[Tuple[str, str, str, str, str]] = [
-    # Грудь
-    ("Жим лёжа штанги", "bench_press", "strength", "chest", "Лопатки сведены, стопы в пол, касание груди контролируем."),
-    ("Жим гантелей лёжа", "db_bench_press", "strength", "chest", "Движение по дуге, не теряй напряжение в груди."),
-    ("Разводка гантелей", "db_fly", "strength", "chest", "Локти слегка согнуты, амплитуда без боли в плечах."),
+# Базовые упражнения: (name, slug, type, group_slug, tip)
+EXERCISES = [
+    # ---- strength (минимальный набор-плейсхолдер, ваш справочник остаётся в БД)
+    ("Жим лежа", "bench_press", "strength", "chest", "Лопатки сведены, таз не отрывай."),
+    ("Приседания со штангой", "back_squat", "strength", "legs", "Спина ровно, колени по носкам."),
+    ("Тяга верхнего блока", "lat_pulldown", "strength", "back", "Тяни локтями, не раскачивайся."),
 
-    # Спина
-    ("Тяга штанги в наклоне", "bb_row", "strength", "back", "Спина ровная, тянем локтём назад, не рвём корпус."),
-    ("Тяга верхнего блока", "lat_pulldown", "strength", "back", "Тяни к верхней груди, плечи вниз и назад."),
-    ("Подтягивания", "pull_up", "strength", "back", "Полный провис и подбор груди к перекладине."),
-
-    # Ноги
-    ("Приседания со штангой", "back_squat", "strength", "legs", "Колени по носкам, спина нейтральная, глубина комфортная."),
-    ("Жим ногами", "leg_press", "strength", "legs", "Стопы на платформе, колени не сводим внутрь."),
-    ("Выпады", "lunges", "strength", "legs", "Шаг назад/вперёд, корпус вертикально, толчок пяткой."),
-
-    # Плечи
-    ("Жим штанги стоя", "ohp", "strength", "shoulders", "Сжатый корпус, не прогибай поясницу, штанга над головой."),
-    ("Жим гантелей сидя", "db_shoulder_press", "strength", "shoulders", "Полный контроль, не бросай вниз."),
-    ("Махи гантелей в стороны", "lateral_raise", "strength", "shoulders", "Малый вес, локоть выше кисти, без читинга."),
-
-    # Руки
-    ("Подъём штанги на бицепс", "bb_curl", "strength", "arms", "Локти у корпуса, не раскачивайся."),
-    ("Французский жим", "skullcrusher", "strength", "arms", "Локти неподвижны, не бей по лбу, пожалуйста."),
-    ("Отжимания на брусьях", "dips", "strength", "arms", "Лопатки сведены, глубину держим в комфорте."),
-
-    # Пресс
-    ("Скручивания", "crunch", "strength", "abs", "Поясница прижата, работаем короткой амплитудой."),
-    ("Планка", "plank", "strength", "abs", "Корпус прямой, не провисай в пояснице."),
-
-    # Кардио (для выбора тренажёра)
-    ("Беговая дорожка", "treadmill", "cardio", "cardio", "Не держись за поручни, держи темп и дыхание."),
-    ("Велотренажёр", "bike", "cardio", "cardio", "Колени по оси, не заваливай внутрь."),
-    ("Гребной тренажёр", "rower", "cardio", "cardio", "Тяни спиной, не только руками."),
+    # ---- cardio (полный набор под текущий бот)
+    ("Беговая дорожка", "treadmill", "cardio", "cardio", "Время/дистанция. Пример: 30:00 5км или просто 30"),
+    ("Велотренажёр", "bike", "cardio", "cardio", "Время/дистанция. Пример: 20:00 10км или просто 20"),
+    ("Эллиптический тренажёр", "elliptical", "cardio", "cardio", "Время. Дистанция опционально."),
+    ("Гребной тренажёр", "rower", "cardio", "cardio", "Время/дистанция. Пример: 15:00 3км"),
+    ("Скакалка", "jump_rope", "cardio", "cardio", "Только время в минутах: 5, 10, 12"),
 ]
 
 async def ensure_seed_data():
     async with await get_session(settings.database_url) as session:
-        # группы
-        existing_groups = {g.slug for g in (await session.exec(select(MuscleGroup))).all()}
-        created = 0
-        for name, slug in GROUPS:
-            if slug not in existing_groups:
-                session.add(MuscleGroup(name=name, slug=slug))
-                created += 1
-        if created:
-            await session.commit()
-
-        # карта slug группы -> id
+        # 1) Группы
         res = await session.exec(select(MuscleGroup))
-        groups = {g.slug: g.id for g in res.all()}
+        existing_groups = {g.slug: g for g in res.all()}
+        for slug, name in DEFAULT_GROUPS:
+            if slug not in existing_groups:
+                session.add(MuscleGroup(slug=slug, name=name))
+        await session.commit()
 
-        # упражнения
-        existing_ex = {e.slug for e in (await session.exec(select(Exercise))).all()}
-        created_ex = 0
-        for name, slug, typ, group_slug, tip in EXERCISES:
-            if slug in existing_ex:
+        # перечитать с id
+        res = await session.exec(select(MuscleGroup))
+        groups = {g.slug: g for g in res.all()}
+
+        # 2) Упражнения (по slug, без апдейтов существующих — идемпотентно)
+        res = await session.exec(select(Exercise))
+        existing = {e.slug: e for e in res.all() if getattr(e, "slug", None)}
+        to_add = []
+        for name, slug, etype, gslug, tip in EXERCISES:
+            if slug in existing:
                 continue
-            mg_id = groups.get(group_slug)
-            if not mg_id:
-                continue
-            session.add(Exercise(
-                name=name,
-                slug=slug,
-                type=typ,
-                primary_muscle_id=mg_id,
-                tip=tip,
-                is_active=True,
-            ))
-            created_ex += 1
-        if created_ex:
+            mg = groups.get(gslug)
+            to_add.append(
+                Exercise(
+                    name=name,
+                    slug=slug,
+                    type=etype,
+                    primary_muscle_id=mg.id if mg else None,
+                    tip=tip,
+                )
+            )
+        if to_add:
+            for e in to_add:
+                session.add(e)
             await session.commit()
