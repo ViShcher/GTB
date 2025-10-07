@@ -14,8 +14,9 @@ profile_router = Router()
 def main_menu() -> ReplyKeyboardMarkup:
     return ReplyKeyboardMarkup(
         keyboard=[
-            [KeyboardButton(text="🏋️ Тренировка"), KeyboardButton(text="⭐ Пресеты")],
-            [KeyboardButton(text="📚 Программы"), KeyboardButton(text="📈 История")],
+            [KeyboardButton(text="🏋️ Тренировка"), KeyboardButton(text="🚴 Кардио")],
+            [KeyboardButton(text="⭐ Пресеты"), KeyboardButton(text="📚 Программы")],
+            [KeyboardButton(text="📈 История")],
             [KeyboardButton(text="⚙️ Настройки")],
         ],
         resize_keyboard=True,
