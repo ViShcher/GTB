@@ -62,22 +62,33 @@ async def _start_new_workout(tg_id: int) -> int:
 
 
 async def _fetch_groups() -> List[MuscleGroup]:
-    async with await get_session(settings.database_url) as session:
-        res = await session.exec(select(MuscleGroup).order_by(MuscleGroup.name))
-        return res.all()
+   async with await get_session(settings.database_url) as session:
+       # В силовом сценарии группу "Кардио" не показываем
+       res = await session.exec(
+           select(MuscleGroup).where(MuscleGroup.slug != "cardio").order_by(MuscleGroup.name)
+       )
+       return res.all()
 
 
 async def _fetch_exercises(group_id: Optional[int], page: int = 0, per_page: int = 10):
     async with await get_session(settings.database_url) as session:
-        if group_id is None:
-            total = (await session.exec(select(Exercise))).all()
+       if group_id is None:
+           # В силовом сценарии показываем только силовые
+           total = (await session.exec(select(Exercise).where(Exercise.type == "strength"))).all()
             total_n = len(total)
             res = await session.exec(
-                select(Exercise).order_by(Exercise.id.desc()).offset(page * per_page).limit(per_page)
+                select(Exercise)
+                .where(Exercise.type == "strength")
+                .order_by(Exercise.id.desc())
+                .offset(page * per_page)
+                .limit(per_page)
             )
         else:
-            base = select(Exercise).where(Exercise.primary_muscle_id == group_id)
-            total_n = len((await session.exec(base)).all())
+            base = select(Exercise).where(
+                Exercise.primary_muscle_id == group_id,
+                Exercise.type == "strength",
+            )
+        total_n = len((await session.exec(base)).all())
             res = await session.exec(base.order_by(Exercise.id.desc()).offset(page * per_page).limit(per_page))
         items = res.all()
         return items, total_n
