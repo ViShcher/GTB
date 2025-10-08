@@ -27,3 +27,6 @@ uvicorn server:app --host 0.0.0.0 --port 8080
 ## Сид
 `ensure_seed_data()` добавляет группу `cardio` и кардио-упражнения: `treadmill`, `bike`, `elliptical`, `rower`, `jump_rope`.
 Силовые и примеры базовых мышечных групп включены.
+
+
+ 
