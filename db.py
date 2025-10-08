@@ -11,9 +11,10 @@ from sqlmodel.ext.asyncio.session import AsyncSession  # важно: из SQLMod
 # Модели базы данных
 # ================================================================
 
+
 class User(SQLModel, table=True):
     id: Optional[int] = Field(default=None, primary_key=True)
-    tg_id: int = Field(index=True, unique=True)
+    tg_id: int = Field(index=True, unique=True, sa_column_kwargs={"type_": "BIGINT"})
     name: Optional[str] = None
     goal: Optional[str] = None           #  ← добавили
     gender: Optional[str] = None
