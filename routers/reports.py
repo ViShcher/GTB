@@ -1,6 +1,6 @@
 from __future__ import annotations
 from datetime import datetime, timedelta, timezone
-from typing import Optional, Tuple, List
+from typing import Optional, Tuple
 
 from aiogram import Router
 from aiogram.filters import Command
@@ -8,7 +8,7 @@ from aiogram.types import Message
 from sqlmodel import select, func
 
 from config import settings
-from db import get_session, Workout, WorkoutItem, Exercise
+from db import get_session, Workout, WorkoutItem, Exercise, User
 
 reports_router = Router()
 
@@ -24,7 +24,6 @@ def _since_for(period: str) -> Optional[datetime]:
         return now - timedelta(days=30)
     if period == "alltime":
         return None
-    # дефолт — неделя
     return now - timedelta(days=7)
 
 def _fmt_int(n: Optional[int]) -> str:
@@ -49,7 +48,9 @@ def _title_for(period: str) -> str:
         "alltime": "Итоги за весь период",
     }.get(period, "Итоги")
 
-async def _last_workout_summary(session, user_tg_id: int, since: Optional[datetime]) -> Tuple[Optional[Workout], bool, int, float, int, float]:
+async def _last_workout_summary(
+    session, user_tg_id: int, since: Optional[datetime]
+) -> Tuple[Optional[Workout], bool, int, float, int, float]:
     """
     Возвращает:
       workout | None,
@@ -59,16 +60,13 @@ async def _last_workout_summary(session, user_tg_id: int, since: Optional[dateti
       cardio_min,
       cardio_km
     """
-    # Последняя тренировка в выбранном окне
-    q = (
+    # Последняя тренировка в окне для пользователя с данным tg_id
+    base = (
         select(Workout)
-        .where(Workout.user_id.in_(
-            select(Workout.user_id).where(Workout.user_id == user_tg_id)
-        ))
+        .join(WorkoutItem, WorkoutItem.workout_id == Workout.id)
+        .join(User, User.id == Workout.user_id)
+        .where(User.tg_id == user_tg_id)
     )
-    # user_id в нашей модели — это внутренний id. Тут проще сделать джоин через items.
-    # Ищем последнюю тренировку по items.
-    base = select(Workout).join(WorkoutItem, WorkoutItem.workout_id == Workout.id)
     if since is not None:
         base = base.where(WorkoutItem.created_at >= since)
     base = base.order_by(Workout.created_at.desc()).limit(1)
@@ -77,10 +75,12 @@ async def _last_workout_summary(session, user_tg_id: int, since: Optional[dateti
     in_period = True
 
     if wk is None:
-        # нет в окне — берём последнюю вообще
+        # нет в окне — берём последнюю вообще для этого пользователя
         base2 = (
             select(Workout)
             .join(WorkoutItem, WorkoutItem.workout_id == Workout.id)
+            .join(User, User.id == Workout.user_id)
+            .where(User.tg_id == user_tg_id)
             .order_by(Workout.created_at.desc())
             .limit(1)
         )
@@ -91,7 +91,7 @@ async def _last_workout_summary(session, user_tg_id: int, since: Optional[dateti
     if wk is None:
         return None, False, 0, 0.0, 0, 0.0
 
-    # Считаем краткий итог по этой тренировке
+    # Краткий итог по тренировке
     q_items = select(WorkoutItem).where(WorkoutItem.workout_id == wk.id)
     items = (await session.exec(q_items)).all()
 
@@ -100,7 +100,6 @@ async def _last_workout_summary(session, user_tg_id: int, since: Optional[dateti
     cardio_sec = 0
     cardio_m = 0.0
 
-    # нужно знать тип упражнения
     if items:
         ex_ids = {it.exercise_id for it in items if it.exercise_id}
         ex_map = {}
@@ -120,44 +119,51 @@ async def _last_workout_summary(session, user_tg_id: int, since: Optional[dateti
                 if it.distance_m:
                     cardio_m += float(it.distance_m)
 
-    return wk, in_period, sets_count, tonnage, int(cardio_sec / 60), float(cardio_m / 1000.0)
+    return (
+        wk,
+        in_period,
+        sets_count,
+        tonnage,
+        int(cardio_sec / 60),
+        float(cardio_m / 1000.0),
+    )
 
 async def _aggregate(session, user_tg_id: int, since: Optional[datetime]):
-    # фильтр по окну и user: по факту user_id у нас на Workout, а считаем по items
-    # считаем по всем items и джоиним Exercise/Workout для типов и владельца
     filters = []
     if since is not None:
         filters.append(WorkoutItem.created_at >= since)
 
-    # только записи пользователя
-    # через join на Workout
-    # кол-во уникальных тренировок
+    # Кол-во уникальных тренировок пользователя
     q_workouts = (
         select(func.count(func.distinct(WorkoutItem.workout_id)))
         .join(Workout, Workout.id == WorkoutItem.workout_id)
-        .where(Workout.user_id == user_tg_id)
+        .join(User, User.id == Workout.user_id)
+        .where(User.tg_id == user_tg_id)
     )
     for f in filters:
         q_workouts = q_workouts.where(f)
     workouts_count = (await session.exec(q_workouts)).one() or 0
 
-    # тоннаж по силовым
+    # Тоннаж по силовым
     q_tonnage = (
         select(func.sum(WorkoutItem.reps * WorkoutItem.weight))
         .join(Workout, Workout.id == WorkoutItem.workout_id)
+        .join(User, User.id == Workout.user_id)
         .join(Exercise, Exercise.id == WorkoutItem.exercise_id)
-        .where(Workout.user_id == user_tg_id, Exercise.type == "strength", WorkoutItem.reps.is_not(None), WorkoutItem.weight.is_not(None))
+        .where(User.tg_id == user_tg_id, Exercise.type == "strength",
+               WorkoutItem.reps.is_not(None), WorkoutItem.weight.is_not(None))
     )
     for f in filters:
         q_tonnage = q_tonnage.where(f)
     tonnage = (await session.exec(q_tonnage)).one() or 0
 
-    # кардио время/дистанция
+    # Кардио время/дистанция
     q_cardio = (
         select(func.sum(WorkoutItem.duration_sec), func.sum(WorkoutItem.distance_m))
         .join(Workout, Workout.id == WorkoutItem.workout_id)
+        .join(User, User.id == Workout.user_id)
         .join(Exercise, Exercise.id == WorkoutItem.exercise_id)
-        .where(Workout.user_id == user_tg_id, Exercise.type == "cardio")
+        .where(User.tg_id == user_tg_id, Exercise.type == "cardio")
     )
     for f in filters:
         q_cardio = q_cardio.where(f)
@@ -169,8 +175,9 @@ async def _aggregate(session, user_tg_id: int, since: Optional[datetime]):
     q_top_str = (
         select(Exercise.name, func.count(WorkoutItem.id), func.sum(WorkoutItem.reps * WorkoutItem.weight))
         .join(Workout, Workout.id == WorkoutItem.workout_id)
+        .join(User, User.id == Workout.user_id)
         .join(Exercise, Exercise.id == WorkoutItem.exercise_id)
-        .where(Workout.user_id == user_tg_id, Exercise.type == "strength")
+        .where(User.tg_id == user_tg_id, Exercise.type == "strength")
         .group_by(Exercise.name)
         .order_by(func.count(WorkoutItem.id).desc(), func.sum(WorkoutItem.reps * WorkoutItem.weight).desc())
         .limit(3)
@@ -183,8 +190,9 @@ async def _aggregate(session, user_tg_id: int, since: Optional[datetime]):
     q_top_cardio = (
         select(Exercise.name, func.sum(WorkoutItem.duration_sec), func.sum(WorkoutItem.distance_m))
         .join(Workout, Workout.id == WorkoutItem.workout_id)
+        .join(User, User.id == Workout.user_id)
         .join(Exercise, Exercise.id == WorkoutItem.exercise_id)
-        .where(Workout.user_id == user_tg_id, Exercise.type == "cardio")
+        .where(User.tg_id == user_tg_id, Exercise.type == "cardio")
         .group_by(Exercise.name)
         .order_by(func.sum(WorkoutItem.duration_sec).desc(), func.sum(WorkoutItem.distance_m).desc())
         .limit(3)
@@ -249,8 +257,9 @@ async def _handle_period(msg: Message, period: str):
     last_block = ""
     if wk is not None:
         tag = "" if in_period else " (вне периода)"
+        ts = wk.created_at.strftime('%Y-%m-%d %H:%M UTC') if wk.created_at else "—"
         last_block = (
-            f"📅 Последняя тренировка{tag}: {wk.created_at.strftime('%Y-%m-%d %H:%M UTC')}\n"
+            f"📅 Последняя тренировка{tag}: {ts}\n"
             f"— {sets_count} подходов, {tonnage:.0f} кг; кардио {cmin} мин / {ckm:.1f} км"
         )
 
