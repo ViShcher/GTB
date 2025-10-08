@@ -1,9 +1,11 @@
 from __future__ import annotations
 from datetime import datetime
 from typing import Optional
-from sqlmodel import Field, SQLModel, create_engine, select
-from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession
+
+from sqlmodel import Field, SQLModel, select
+from sqlalchemy.ext.asyncio import create_async_engine
 from sqlalchemy.orm import sessionmaker
+from sqlmodel.ext.asyncio.session import AsyncSession  # важно: из SQLModel, не из SQLAlchemy
 
 # ================================================================
 # Модели базы данных
@@ -44,14 +46,14 @@ class Workout(SQLModel, table=True):
     id: Optional[int] = Field(default=None, primary_key=True)
     user_id: int = Field(foreign_key="user.id")
     title: str
-    created_at: datetime = Field(default_factory=datetime.utcnow)  # <── новое поле
+    created_at: datetime = Field(default_factory=datetime.utcnow)  # автодата создания
 
 
 class WorkoutItem(SQLModel, table=True):
     id: Optional[int] = Field(default=None, primary_key=True)
     workout_id: int = Field(foreign_key="workout.id")
     exercise_id: int = Field(foreign_key="exercise.id")
-    created_at: datetime = Field(default_factory=datetime.utcnow)  # <── новое поле
+    created_at: datetime = Field(default_factory=datetime.utcnow)  # автодата создания
 
     # Силовые
     weight: Optional[float] = None
