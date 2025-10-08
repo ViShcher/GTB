@@ -9,12 +9,6 @@ from db import init_db
 from seed_data import ensure_seed_data
 from routers import basic_router, profile_router, training_router, cardio_router, reports_router
 
-dp.include_router(profile_router)
-dp.include_router(cardio_router)
-dp.include_router(training_router)
-dp.include_router(basic_router)
-dp.include_router(reports_router)   # можно и выше basic, не критично
-
 # ================================================================
 # Инициализация FastAPI и бота
 # ================================================================
@@ -24,17 +18,20 @@ app = FastAPI()
 async def health():
     return {"status": "ok"}
 
+# Сначала создаём бота и диспетчер
 bot = Bot(
     settings.bot_token,
     default=DefaultBotProperties(parse_mode=ParseMode.HTML),
 )
 dp = Dispatcher()
 
-# Порядок подключения роутеров: profile -> cardio -> training -> basic
+# И только потом подключаем роутеры
+# (порядок важен, чтобы кардио не перехватывалось силовыми)
 dp.include_router(profile_router)
 dp.include_router(cardio_router)
 dp.include_router(training_router)
 dp.include_router(basic_router)
+dp.include_router(reports_router)
 
 # ================================================================
 # События запуска и остановки
@@ -44,7 +41,7 @@ async def on_startup():
     if not settings.bot_token:
         raise RuntimeError("BOT_TOKEN не задан")
 
-    # Инициализация базы и начальные данные
+    # Инициализация базы и сид
     await init_db(settings.database_url)
     await ensure_seed_data()
 
@@ -54,13 +51,15 @@ async def on_startup():
         BotCommand(command="start", description="Онбординг и профиль"),
         BotCommand(command="train", description="Начать тренировку"),
         BotCommand(command="cardio", description="Кардио-тренировка"),
+        BotCommand(command="weekly", description="Итоги за 7 дней"),
+        BotCommand(command="monthly", description="Итоги за 30 дней"),
+        BotCommand(command="alltime", description="Итоги за весь период"),
         BotCommand(command="help", description="Помощь и команды"),
     ])
     await bot.set_chat_menu_button(menu_button=MenuButtonDefault())
 
     # Устанавливаем вебхук
     await bot.set_webhook(settings.webhook_url, drop_pending_updates=True)
-
 
 @app.on_event("shutdown")
 async def on_shutdown():
