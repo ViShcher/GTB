@@ -1,5 +1,5 @@
 from __future__ import annotations
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timedelta
 from typing import Optional, Tuple
 
 from aiogram import Router
@@ -14,7 +14,8 @@ reports_router = Router()
 
 # ------------ helpers ------------
 def _now_utc() -> datetime:
-    return datetime.now(timezone.utc)
+    # Naive UTC, чтобы сравнивать с TIMESTAMP WITHOUT TIME ZONE
+    return datetime.utcnow()
 
 def _since_for(period: str) -> Optional[datetime]:
     now = _now_utc()
@@ -51,16 +52,7 @@ def _title_for(period: str) -> str:
 async def _last_workout_summary(
     session, user_tg_id: int, since: Optional[datetime]
 ) -> Tuple[Optional[Workout], bool, int, float, int, float]:
-    """
-    Возвращает:
-      workout | None,
-      in_period: bool,
-      sets_count,
-      tonnage_kg,
-      cardio_min,
-      cardio_km
-    """
-    # Последняя тренировка в окне для пользователя с данным tg_id
+    # Ищем последнюю тренировку пользователя в окне
     base = (
         select(Workout)
         .join(WorkoutItem, WorkoutItem.workout_id == Workout.id)
@@ -70,12 +62,11 @@ async def _last_workout_summary(
     if since is not None:
         base = base.where(WorkoutItem.created_at >= since)
     base = base.order_by(Workout.created_at.desc()).limit(1)
-    res = await session.exec(base)
-    wk = res.first()
+    wk = (await session.exec(base)).first()
     in_period = True
 
     if wk is None:
-        # нет в окне — берём последнюю вообще для этого пользователя
+        # Берём последнюю вообще
         base2 = (
             select(Workout)
             .join(WorkoutItem, WorkoutItem.workout_id == Workout.id)
@@ -84,17 +75,13 @@ async def _last_workout_summary(
             .order_by(Workout.created_at.desc())
             .limit(1)
         )
-        res2 = await session.exec(base2)
-        wk = res2.first()
+        wk = (await session.exec(base2)).first()
         in_period = False
 
     if wk is None:
         return None, False, 0, 0.0, 0, 0.0
 
-    # Краткий итог по тренировке
-    q_items = select(WorkoutItem).where(WorkoutItem.workout_id == wk.id)
-    items = (await session.exec(q_items)).all()
-
+    items = (await session.exec(select(WorkoutItem).where(WorkoutItem.workout_id == wk.id))).all()
     sets_count = len(items)
     tonnage = 0.0
     cardio_sec = 0
@@ -104,8 +91,7 @@ async def _last_workout_summary(
         ex_ids = {it.exercise_id for it in items if it.exercise_id}
         ex_map = {}
         if ex_ids:
-            q_ex = select(Exercise.id, Exercise.type).where(Exercise.id.in_(ex_ids))
-            for eid, etype in (await session.exec(q_ex)).all():
+            for eid, etype in (await session.exec(select(Exercise.id, Exercise.type).where(Exercise.id.in_(ex_ids)))).all():
                 ex_map[eid] = etype or "strength"
 
         for it in items:
@@ -119,21 +105,14 @@ async def _last_workout_summary(
                 if it.distance_m:
                     cardio_m += float(it.distance_m)
 
-    return (
-        wk,
-        in_period,
-        sets_count,
-        tonnage,
-        int(cardio_sec / 60),
-        float(cardio_m / 1000.0),
-    )
+    return wk, in_period, sets_count, tonnage, int(cardio_sec / 60), float(cardio_m / 1000.0)
 
 async def _aggregate(session, user_tg_id: int, since: Optional[datetime]):
     filters = []
     if since is not None:
         filters.append(WorkoutItem.created_at >= since)
 
-    # Кол-во уникальных тренировок пользователя
+    # Кол-во уникальных тренировок
     q_workouts = (
         select(func.count(func.distinct(WorkoutItem.workout_id)))
         .join(Workout, Workout.id == WorkoutItem.workout_id)
@@ -150,14 +129,18 @@ async def _aggregate(session, user_tg_id: int, since: Optional[datetime]):
         .join(Workout, Workout.id == WorkoutItem.workout_id)
         .join(User, User.id == Workout.user_id)
         .join(Exercise, Exercise.id == WorkoutItem.exercise_id)
-        .where(User.tg_id == user_tg_id, Exercise.type == "strength",
-               WorkoutItem.reps.is_not(None), WorkoutItem.weight.is_not(None))
+        .where(
+            User.tg_id == user_tg_id,
+            Exercise.type == "strength",
+            WorkoutItem.reps.is_not(None),
+            WorkoutItem.weight.is_not(None),
+        )
     )
     for f in filters:
         q_tonnage = q_tonnage.where(f)
     tonnage = (await session.exec(q_tonnage)).one() or 0
 
-    # Кардио время/дистанция
+    # Кардио
     q_cardio = (
         select(func.sum(WorkoutItem.duration_sec), func.sum(WorkoutItem.distance_m))
         .join(Workout, Workout.id == WorkoutItem.workout_id)
@@ -171,7 +154,7 @@ async def _aggregate(session, user_tg_id: int, since: Optional[datetime]):
     cardio_min = (cardio_sec or 0) / 60.0
     cardio_km = (cardio_m or 0) / 1000.0
 
-    # ТОП-3 силовые: по количеству подходов, затем по тоннажу
+    # ТОП-3 силовые
     q_top_str = (
         select(Exercise.name, func.count(WorkoutItem.id), func.sum(WorkoutItem.reps * WorkoutItem.weight))
         .join(Workout, Workout.id == WorkoutItem.workout_id)
@@ -186,7 +169,7 @@ async def _aggregate(session, user_tg_id: int, since: Optional[datetime]):
         q_top_str = q_top_str.where(f)
     top_strength = (await session.exec(q_top_str)).all()
 
-    # ТОП-3 кардио: по времени, затем по дистанции
+    # ТОП-3 кардио
     q_top_cardio = (
         select(Exercise.name, func.sum(WorkoutItem.duration_sec), func.sum(WorkoutItem.distance_m))
         .join(Workout, Workout.id == WorkoutItem.workout_id)
@@ -224,7 +207,7 @@ def _render(period: str, agg, last_block: str) -> str:
     ]
     if agg["top_strength"]:
         for i, (name, cnt, ton) in enumerate(agg["top_strength"], 1):
-            txt.append(f"{i}) {name} — {int(cnt)} подходов")
+            txt.append(f"{i}) {int(cnt)} — {name}")
     else:
         txt.append("— нет данных")
 
@@ -233,7 +216,7 @@ def _render(period: str, agg, last_block: str) -> str:
         for i, (name, dur, dist) in enumerate(agg["top_cardio"], 1):
             mins = int((dur or 0) / 60)
             km = float((dist or 0) / 1000.0)
-            txt.append(f"{i}) {name} — {mins} мин / {km:.1f} км")
+            txt.append(f"{i}) {mins} мин / {km:.1f} км — {name}")
     else:
         txt.append("— нет данных")
 
@@ -257,7 +240,7 @@ async def _handle_period(msg: Message, period: str):
     last_block = ""
     if wk is not None:
         tag = "" if in_period else " (вне периода)"
-        ts = wk.created_at.strftime('%Y-%m-%d %H:%M UTC') if wk.created_at else "—"
+        ts = wk.created_at.strftime('%Y-%m-%d %H:%M') if wk.created_at else "—"
         last_block = (
             f"📅 Последняя тренировка{tag}: {ts}\n"
             f"— {sets_count} подходов, {tonnage:.0f} кг; кардио {cmin} мин / {ckm:.1f} км"
