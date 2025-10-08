@@ -5,7 +5,7 @@ from aiogram.client.default import DefaultBotProperties
 
 from config import settings
 from db import init_db
-from routers import basic_router, profile_router, training_router, cardio_router
+from routers import basic_router, profile_router, training_router, cardio_router, reports_router
 
 bot = Bot(
     token=settings.bot_token,
