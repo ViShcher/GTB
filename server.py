@@ -47,15 +47,6 @@ async def on_startup():
 
     # Команды бота
     await bot.delete_my_commands()
-    await bot.set_my_commands([
-        BotCommand(command="start", description="Онбординг и профиль"),
-        BotCommand(command="train", description="Начать тренировку"),
-        BotCommand(command="cardio", description="Кардио-тренировка"),
-        BotCommand(command="weekly", description="Итоги за 7 дней"),
-        BotCommand(command="monthly", description="Итоги за 30 дней"),
-        BotCommand(command="alltime", description="Итоги за весь период"),
-        BotCommand(command="help", description="Помощь и команды"),
-    ])
     await bot.set_chat_menu_button(menu_button=MenuButtonDefault())
 
     # Устанавливаем вебхук
