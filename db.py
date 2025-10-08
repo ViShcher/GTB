@@ -3,6 +3,8 @@ from datetime import datetime
 from typing import Optional
 
 from sqlmodel import Field, SQLModel, select
+from sqlalchemy import Column, BigInteger  # ← добавь это
+
 from sqlalchemy.ext.asyncio import create_async_engine
 from sqlalchemy.orm import sessionmaker
 from sqlmodel.ext.asyncio.session import AsyncSession  # важно: из SQLModel, не из SQLAlchemy
@@ -14,7 +16,8 @@ from sqlmodel.ext.asyncio.session import AsyncSession  # важно: из SQLMod
 
 class User(SQLModel, table=True):
     id: Optional[int] = Field(default=None, primary_key=True)
-    tg_id: int = Field(index=True, unique=True, sa_column_kwargs={"type_": "BIGINT"})
+    # Telegram ID спокойно вылетает за пределы int32, поэтому BIGINT
+    tg_id: int = Field(sa_column=Column(BigInteger, unique=True, index=True))
     name: Optional[str] = None
     goal: Optional[str] = None           #  ← добавили
     gender: Optional[str] = None
