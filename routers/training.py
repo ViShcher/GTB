@@ -74,32 +74,20 @@ async def _fetch_groups() -> List[MuscleGroup]:
 
 async def _fetch_exercises(group_id: Optional[int], page: int = 0, per_page: int = 10):
     async with await get_session(settings.database_url) as session:
-        if group_id is None:
-            # В силовом сценарии показываем только силовые упражнения
-            total = (
-                await session.exec(select(Exercise).where(Exercise.type == "strength"))
-            ).all()
-            total_n = len(total)
-            res = await session.exec(
-                select(Exercise)
-                .where(Exercise.type == "strength")
-                .order_by(Exercise.id.desc())
-                .offset(page * per_page)
-                .limit(per_page)
-            )
-        else:
-            base = select(Exercise).where(
-                Exercise.primary_muscle_id == group_id,
-                Exercise.type == "strength",
-            )
-            total_n = len((await session.exec(base)).all())
-            res = await session.exec(
-                base.order_by(Exercise.id.desc())
-                .offset(page * per_page)
-                .limit(per_page)
-            )
+        q = select(Exercise).where(Exercise.type == "strength")
+        if group_id is not None:
+            q = q.where(Exercise.primary_muscle_id == group_id)
+        total_n = await session.exec(
+            select(func.count(Exercise.id)).select_from(q.subquery())
+        )
+        total = int(total_n.one() or 0)
+        res = await session.exec(
+            q.order_by(Exercise.name.asc())
+             .offset(page * per_page)
+             .limit(per_page)
+        )
         items = res.all()
-        return items, total_n
+        return items, total
 
 
 async def _count_sets(workout_id: int, exercise_id: int) -> int:
