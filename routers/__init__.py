@@ -11,6 +11,3 @@ __all__ = [
     "cardio_router",
     "reports_router",
 ]
-
-# Порядок важен: cardio выше training, чтобы кардио-ввод не перехватывался силовым логгером
-__all__ = ["basic_router", "profile_router", "cardio_router", "training_router"]
