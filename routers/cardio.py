@@ -53,7 +53,7 @@ async def _get_or_create_workout(tg_id: int) -> int:
         await session.refresh(w)
         return w.id
 
-aasync def _ensure_default_cardio():
+async def _ensure_default_cardio():
     """Создаём кардио-упражнения по умолчанию (со slug и привязкой к группе 'cardio')."""
     async with await get_session(settings.database_url) as session:
         # какие кардио уже есть
