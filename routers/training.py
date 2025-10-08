@@ -222,7 +222,7 @@ async def pick_exercise(cb: CallbackQuery, state: FSMContext):
 
     await cb.message.edit_text(
         _exercise_card_text(name, saved),
-        reply_markup=_exercise_panel_kb()(),
+        reply_markup=_exercise_panel_kb(),
         parse_mode="HTML"
     )
 
@@ -302,12 +302,12 @@ async def log_set(msg: Message, state: FSMContext):
             chat_id=msg.chat.id,
             message_id=last_msg_id or msg.message_id,
             text=text,
-            reply_markup=_exercise_panel_kb()(),
+            reply_markup=_exercise_panel_kb(),
             parse_mode="HTML",
         )
     except Exception:
         # если не получилось отредактировать, просто отправим новую карточку
-        sent = await msg.answer(text, reply_markup=_exercise_panel_kb()(), parse_mode="HTML")
+        sent = await msg.answer(text, reply_markup=_exercise_panel_kb(), parse_mode="HTML")
         last_msg_id = sent.message_id
         await state.update_data(s_last_msg=last_msg_id)
 
