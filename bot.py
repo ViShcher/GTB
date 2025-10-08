@@ -17,6 +17,7 @@ dp.include_router(profile_router)
 dp.include_router(cardio_router)
 dp.include_router(training_router)
 dp.include_router(basic_router)
+dp.include_router(reports_router)
 
 async def main():
     if not settings.bot_token:
