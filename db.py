@@ -15,6 +15,7 @@ class User(SQLModel, table=True):
     id: Optional[int] = Field(default=None, primary_key=True)
     tg_id: int = Field(index=True, unique=True)
     name: Optional[str] = None
+    goal: Optional[str] = None           #  ← добавили
     gender: Optional[str] = None
     age: Optional[int] = None
     height_cm: Optional[int] = None
