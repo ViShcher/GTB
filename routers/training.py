@@ -72,22 +72,28 @@ async def _fetch_groups() -> List[MuscleGroup]:
         return res.all()
 
 
+from sqlalchemy import func
+
 async def _fetch_exercises(group_id: Optional[int], page: int = 0, per_page: int = 10):
     async with await get_session(settings.database_url) as session:
-        q = select(Exercise).where(Exercise.type == "strength")
+        base_query = select(Exercise).where(Exercise.type == "strength")
         if group_id is not None:
-            q = q.where(Exercise.primary_muscle_id == group_id)
-        total_n = await session.exec(
-            select(func.count(Exercise.id)).select_from(q.subquery())
+            base_query = base_query.where(Exercise.primary_muscle_id == group_id)
+
+        # считаем количество
+        count_query = select(func.count()).select_from(base_query.subquery())
+        total_n = (await session.exec(count_query)).one() or 0
+
+        # выбираем страницу
+        items = (
+            (await session.exec(
+                base_query.order_by(Exercise.name.asc())
+                .offset(page * per_page)
+                .limit(per_page)
+            )).all()
         )
-        total = int(total_n.one() or 0)
-        res = await session.exec(
-            q.order_by(Exercise.name.asc())
-             .offset(page * per_page)
-             .limit(per_page)
-        )
-        items = res.all()
-        return items, total
+
+        return items, int(total_n)
 
 
 async def _count_sets(workout_id: int, exercise_id: int) -> int:
