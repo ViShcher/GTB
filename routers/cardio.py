@@ -53,21 +53,27 @@ async def _get_or_create_workout(tg_id: int) -> int:
         await session.refresh(w)
         return w.id
 
-async def _ensure_default_cardio():
+aasync def _ensure_default_cardio():
     """Создаём кардио-упражнения по умолчанию (со slug и привязкой к группе 'cardio')."""
     async with await get_session(settings.database_url) as session:
+        # какие кардио уже есть
         res = await session.exec(select(Exercise).where(Exercise.type == "cardio"))
         existing = res.all()
         have_slugs = {e.slug for e in existing if getattr(e, "slug", None)}
 
-        # найдём id группы 'cardio' (по slug, на всякий случай — по имени)
+        # найдём/создадим группу 'cardio'
         mg = await session.exec(select(MuscleGroup).where(MuscleGroup.slug == "cardio"))
         group = mg.first()
         if not group:
-            mg = await session.exec(select(MuscleGroup).where(MuscleGroup.name == "Кардио"))
-            group = mg.first()
-        group_id = group.id if group else None
+            # если сид ещё не отработал — создадим здесь
+            group = MuscleGroup(slug="cardio", name="Кардио")
+            session.add(group)
+            await session.commit()
+            await session.refresh(group)
 
+        group_id = group.id
+
+        # докинем недостающие упражнения
         to_add = []
         for name, slug in DEFAULT_CARDIO:
             if slug not in have_slugs:
