@@ -2,9 +2,10 @@ from __future__ import annotations
 from datetime import datetime, timedelta
 from typing import Optional, Tuple
 
+
 from aiogram import Router, F
 from aiogram.filters import Command
-from aiogram.types import Message
+from aiogram.types import Message, InlineKeyboardMarkup, InlineKeyboardButton, CallbackQuery
 from sqlmodel import select, func
 
 from config import settings
@@ -248,13 +249,14 @@ def _render(period: str, agg, last_block: str) -> str:
 
     return "\n".join(txt)
 
-async def _handle_period(msg: Message, period: str):
+
+async def _handle_period(msg: Message, period: str, user_tg_id: Optional[int] = None):
     since = _since_for(period)
-    user_tg_id = msg.from_user.id
+    uid = user_tg_id or msg.from_user.id
 
     async with await get_session(settings.database_url) as session:
-        agg = await _aggregate(session, user_tg_id, since)
-        wk, in_period, sets_count, tonnage, cmin, ckm = await _last_workout_summary(session, user_tg_id, since)
+        agg = await _aggregate(session, uid, since)
+        wk, in_period, sets_count, tonnage, cmin, ckm = await _last_workout_summary(session, uid, since)
 
     if wk is None and agg["workouts_count"] == 0 and agg["cardio_min"] == 0 and agg["tonnage"] == 0:
         await msg.answer("За выбранный период данных нет. Начни с `/train` или `/cardio`.")
@@ -284,3 +286,22 @@ async def monthly(msg: Message):
 @reports_router.message(Command("alltime"))
 async def alltime(msg: Message):
     await _handle_period(msg, "alltime")
+
+# ===== Меню «История» по кнопкам =====
+def _history_kb() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="📅 7 дней", callback_data="rp:weekly")],
+        [InlineKeyboardButton(text="🗓 30 дней", callback_data="rp:monthly")],
+        [InlineKeyboardButton(text="∞ Весь период", callback_data="rp:alltime")],
+    ])
+
+@reports_router.message(F.text == "📈 История")
+async def history_menu(msg: Message):
+    await msg.answer("Выбери период:", reply_markup=_history_kb())
+
+@reports_router.callback_query(F.data.startswith("rp:"))
+async def history_pick_period(cb: CallbackQuery):
+    period = cb.data.split(":", 1)[1]
+    await cb.answer()
+    # критично: используем cb.from_user.id, а НЕ cb.message.from_user.id (это бот)
+    await _handle_period(cb.message, period, user_tg_id=cb.from_user.id)
