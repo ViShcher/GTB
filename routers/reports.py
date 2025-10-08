@@ -2,7 +2,7 @@ from __future__ import annotations
 from datetime import datetime, timedelta
 from typing import Optional, Tuple
 
-from aiogram import Router
+from aiogram import Router, F
 from aiogram.filters import Command
 from aiogram.types import Message
 from sqlmodel import select, func
@@ -11,6 +11,29 @@ from config import settings
 from db import get_session, Workout, WorkoutItem, Exercise, User
 
 reports_router = Router()
+
+# ===== Меню «История» (кнопки, не команды) =====
+from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
+
+def _history_kb() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="📅 7 дней", callback_data="rp:weekly")],
+        [InlineKeyboardButton(text="🗓 30 дней", callback_data="rp:monthly")],
+        [InlineKeyboardButton(text="∞ Весь период", callback_data="rp:alltime")],
+    ])
+
+# Нажатие кнопки «📈 История» из главного меню
+@reports_router.message(F.text == "📈 История")
+async def history_menu(msg):
+    await msg.answer("Выбери период:", reply_markup=_history_kb())
+
+# Выбор периода кнопкой
+@reports_router.callback_query(F.data.startswith("rp:"))
+async def history_pick_period(cb):
+    period = cb.data.split(":", 1)[1]
+    await cb.answer()
+    # Отрисуем отчёт тем же движком, что и у команд
+    await _handle_period(cb.message, period)
 
 # ------------ helpers ------------
 def _now_utc() -> datetime:
