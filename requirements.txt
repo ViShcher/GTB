@@ -3,7 +3,7 @@ aiohttp==3.10.10
 fastapi==0.115.2
 uvicorn==0.30.6
 pydantic==2.9.2
-sqlmodel==0.0.22
+sqlmodel==0.0.14
 python-dotenv==1.0.1
 aiosqlite==0.20.0   
 asyncpg
