@@ -31,25 +31,6 @@ dp.include_router(training_router)
 dp.include_router(basic_router)
 
 # ================================================================
-# Миграция created_at (временный эндпоинт, удалить после выполнения)
-# ================================================================
-from sqlalchemy import text
-from sqlalchemy.ext.asyncio import create_async_engine
-
-@app.get("/migrate_created_at")
-async def migrate_created_at():
-    """Добавляет поле created_at в workout и workoutitem, если их нет."""
-    engine = create_async_engine(settings.database_url, future=True)
-    async with engine.begin() as conn:
-        await conn.execute(text(
-            "ALTER TABLE workout ADD COLUMN IF NOT EXISTS created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP;"
-        ))
-        await conn.execute(text(
-            "ALTER TABLE workoutitem ADD COLUMN IF NOT EXISTS created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP;"
-        ))
-    return {"status": "ok"}
-
-# ================================================================
 # События запуска и остановки
 # ================================================================
 @app.on_event("startup")
@@ -57,7 +38,7 @@ async def on_startup():
     if not settings.bot_token:
         raise RuntimeError("BOT_TOKEN не задан")
 
-    # Инициализация базы
+    # Инициализация базы и начальные данные
     await init_db(settings.database_url)
     await ensure_seed_data()
 
@@ -73,6 +54,7 @@ async def on_startup():
 
     # Устанавливаем вебхук
     await bot.set_webhook(settings.webhook_url, drop_pending_updates=True)
+
 
 @app.on_event("shutdown")
 async def on_shutdown():
