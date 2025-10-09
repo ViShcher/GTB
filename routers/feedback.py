@@ -1,5 +1,6 @@
 # routers/feedback.py — сбор обратной связи и пересылка во второго бота
 
+from routers.profile import main_menu
 from __future__ import annotations
 
 import asyncio
@@ -58,9 +59,14 @@ async def choose_type(cb: CallbackQuery, state: FSMContext):
         "free": "Напиши всё, что хочешь передать разработчику.",
     }[fb_type]
 
-    await cb.message.edit_text(f"✍️ {prompt}\n\nОтправь одним сообщением. Лимит 4096 символов.",
-                               reply_markup=cancel_kb())
+    await cb.message.edit_text(
+        f"✍️ {prompt}\n\nОтправь одним сообщением. Лимит 4096 символов.",
+        reply_markup=cancel_kb()
+    )
+    # запомним id этой карточки, чтобы потом заменить её на «спасибо» без кнопок
+    await state.update_data(fb_prompt_msg_id=cb.message.message_id)
     await state.set_state(FB.typing)
+
 
 # Отмена ввода
 @feedback_router.callback_query(F.data == "fb:cancel")
@@ -118,8 +124,27 @@ async def receive_text(msg: Message, state: FSMContext):
         return
 
     _last_sent[user_tg_id] = now
+
+    # аккуратно заменим старую карточку с инструкцией на «спасибо» и уберём кнопку «Отменить»
+    prompt_id = (await state.get_data()).get("fb_prompt_msg_id")
+    thanks = "✅ Отправлено. Спасибо, мы уже притворяемся, что читаем."
+    if prompt_id:
+        try:
+            await msg.bot.edit_message_text(
+                chat_id=msg.chat.id,
+                message_id=prompt_id,
+                text=thanks
+            )
+        except Exception:
+            # если не удалось отредактировать — просто отправим новое сообщение
+            await msg.answer(thanks)
+    else:
+        await msg.answer(thanks)
+
+    # очистим состояние и вернём пользователя в главное меню
     await state.clear()
-    await msg.answer("✅ Отправлено. Спасибо!")
+    await msg.answer("Главное меню:", reply_markup=main_menu())
+
 
 async def _relay_to_admin_bot(fb_type: str, text: str, from_user: int, username: Optional[str],
                               full_name: Optional[str], feedback_id: int) -> tuple[bool, Optional[str]]:
