@@ -81,8 +81,14 @@ def _chunk(it: Iterable, n: int) -> list[list]:
     return rows
 
 def _groups_kb(groups: list[MuscleGroup]) -> InlineKeyboardMarkup:
+    """
+    Клавиатура выбора группы мышц:
+    - две кнопки в ряд по списку групп;
+    - внизу отдельная строка «🏁 Завершить тренировку».
+    """
     btns = [InlineKeyboardButton(text=g.name, callback_data=f"grp:{g.id}") for g in groups]
-    rows = _chunk(btns, 2)  # две кнопки в ряд
+    rows = _chunk(btns, 2)
+    rows.append([InlineKeyboardButton(text="🏁 Завершить тренировку", callback_data="workout:finish")])
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
 def _exercises_kb(exercises: list[Exercise]) -> InlineKeyboardMarkup:
