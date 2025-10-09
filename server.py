@@ -7,7 +7,7 @@ from aiogram.client.default import DefaultBotProperties
 from config import settings
 from db import init_db
 from seed_data import ensure_seed_data
-from routers import basic_router, profile_router, training_router, cardio_router, reports_router
+from routers import basic_router, profile_router, training_router, cardio_router, reports_router, feedback_router
 
 # ================================================================
 # Инициализация FastAPI и бота
