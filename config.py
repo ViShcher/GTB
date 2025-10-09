@@ -32,6 +32,12 @@ class Settings:
         # строка подключения к БД
         raw_db = os.getenv("DATABASE_URL", "sqlite+aiosqlite:///./db.sqlite3").strip()
         self.database_url: str = _coerce_asyncpg(raw_db)
+        
+        feedback_bot_token: str | None = None
+        feedback_chat_id: int | None = None
+
+    class Config:
+        env_file = ".env"
 
     @property
     def webhook_url(self) -> str:
@@ -45,7 +51,7 @@ class Settings:
         if not base:
             return f"/{self.webhook_path}"
         return f"{base}/{self.webhook_path}"
-
+    
 
 # единый инстанс настроек
 settings = Settings()
