@@ -25,7 +25,16 @@ class User(SQLModel, table=True):
     height_cm: Optional[int] = None
     weight_kg: Optional[float] = None
 
-
+class Feedback(SQLModel, table=True):
+    id: Optional[int] = Field(default=None, primary_key=True)
+    user_id: Optional[int] = Field(default=None, foreign_key="user.id")
+    user_tg_id: int = Field(index=True)
+    username: Optional[str] = Field(default=None, max_length=255)
+    full_name: Optional[str] = Field(default=None, max_length=255)
+    type: str = Field(max_length=16)  # bug | idea | free
+    text: str
+    created_at: datetime = Field(default_factory=datetime.utcnow)
+    
 class MuscleGroup(SQLModel, table=True):
     id: Optional[int] = Field(default=None, primary_key=True)
     slug: str = Field(index=True, unique=True)
