@@ -95,14 +95,20 @@ def _exercises_kb(exercises: list[Exercise]) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
 def _exercise_panel_kb(has_last: bool) -> InlineKeyboardMarkup:
-    # В упражнении НЕ показываем «Завершить тренировку»
-    rows = [
-        [InlineKeyboardButton(text="⬅️ Назад к группам", callback_data="back:groups")]
-    ]
-    if has_last:
-        rows[0].append(InlineKeyboardButton(text="🔁 Ещё такой же", callback_data="ex:repeat"))
-    rows.append([InlineKeyboardButton(text="✅ Завершить упражнение", callback_data="ex:finish")])
-    return InlineKeyboardMarkup(inline_keyboard=rows)
+    """
+    Пока нет сохранённых подходов: можно уйти «Назад к группам».
+    После первого подхода: убираем «Назад», оставляем только повтор и завершение упражнения.
+    """
+    if not has_last:
+        return InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="⬅️ Назад к группам", callback_data="back:groups")],
+            [InlineKeyboardButton(text="✅ Завершить упражнение", callback_data="ex:finish")],
+        ])
+    else:
+        return InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="🔁 Ещё такой же", callback_data="ex:repeat")],
+            [InlineKeyboardButton(text="✅ Завершить упражнение", callback_data="ex:finish")],
+        ])
 
 async def _exercise_name(ex_id: int) -> str:
     async with await get_session(settings.database_url) as session:
