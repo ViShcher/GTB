@@ -75,7 +75,8 @@ def stepper_kb(prefix: str, value: float, steps: list[float], unit: str, with_ba
 
 def settings_menu_kb():
     return InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="👤 Профиль", callback_data="settings:profile")],
+        [InlineKeyboardButton(text="👤 Профиль", callback_data="settings:profile"),
+         InlineKeyboardButton(text="💬 Обратная связь", callback_data="settings:feedback")],
     ])
 
 
