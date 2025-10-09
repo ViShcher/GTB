@@ -1,5 +1,6 @@
 # config.py
 import os
+from typing import Optional
 
 
 def _coerce_asyncpg(url: str) -> str:
@@ -32,9 +33,15 @@ class Settings:
         # строка подключения к БД
         raw_db = os.getenv("DATABASE_URL", "sqlite+aiosqlite:///./db.sqlite3").strip()
         self.database_url: str = _coerce_asyncpg(raw_db)
-        
-        feedback_bot_token: str | None = None
-        feedback_chat_id: int | None = None
+
+        # ===== Новые настройки для обратной связи =====
+        # токен второго бота (куда отправляем отзывы)
+        fb_token = os.getenv("FEEDBACK_BOT_TOKEN", "").strip()
+        self.feedback_bot_token: Optional[str] = fb_token or None
+
+        # chat_id чата/канала/лички, куда второй бот будет слать отзывы
+        fb_chat = os.getenv("FEEDBACK_CHAT_ID", "").strip()
+        self.feedback_chat_id: Optional[int] = int(fb_chat) if fb_chat else None
 
     class Config:
         env_file = ".env"
@@ -51,7 +58,7 @@ class Settings:
         if not base:
             return f"/{self.webhook_path}"
         return f"{base}/{self.webhook_path}"
-    
+
 
 # единый инстанс настроек
 settings = Settings()
