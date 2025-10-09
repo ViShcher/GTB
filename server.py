@@ -32,6 +32,7 @@ dp.include_router(cardio_router)
 dp.include_router(training_router)
 dp.include_router(basic_router)
 dp.include_router(reports_router)
+dp.include_router(feedback_router)
 
 # ================================================================
 # События запуска и остановки
