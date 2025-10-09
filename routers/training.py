@@ -1,6 +1,4 @@
-# routers/training.py — финальная версия под текущую схему БД
-# Силовые: группы → упражнения → ввод "вес повторы" / "вес/повторы" → счётчик → завершение
-
+# routers/training.py — компактный UX: повтор подхода кнопкой, без лишнего текста
 from __future__ import annotations
 
 from datetime import datetime
@@ -26,7 +24,8 @@ class Training(StatesGroup):
     log_set = State()  # ввод подходов для выбранного упражнения
 
 # ========= Парсер ввода =========
-# Разделитель между весом и повторами: пробел или "/" (НЕ запятая/точка, они допустимы только ВНУТРИ веса)
+# Разделитель между весом и повторами: пробел или "/"
+# Запятая/точка допустимы ТОЛЬКО внутри веса (112,5; 24.5 и т.п.)
 STRENGTH_INPUT_RE = re.compile(
     r"^\s*(?P<kg>\d+(?:[.,]\d+)?)\s*(?:/|\s+)\s*(?P<reps>\d+)\s*$"
 )
@@ -45,7 +44,7 @@ async def _create_workout_for_user(tg_id: int) -> int:
         if not user:
             raise RuntimeError("NO_USER")
         title = datetime.now().strftime("%Y-%m-%d %H:%M")
-        w = Workout(user_id=user.id, title=title)  # created_at ставится моделью
+        w = Workout(user_id=user.id, title=title)  # created_at выставляет модель
         session.add(w)
         await session.commit()
         await session.refresh(w)
@@ -95,12 +94,15 @@ def _exercises_kb(exercises: list[Exercise]) -> InlineKeyboardMarkup:
     ])
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
-def _exercise_panel_kb() -> InlineKeyboardMarkup:
-    return InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="⬅️ Назад к группам", callback_data="back:groups"),
-         InlineKeyboardButton(text="✅ Завершить упражнение", callback_data="ex:finish")],
-        [InlineKeyboardButton(text="🏁 Завершить тренировку", callback_data="workout:finish")],
-    ])
+def _exercise_panel_kb(has_last: bool) -> InlineKeyboardMarkup:
+    # В упражнении НЕ показываем «Завершить тренировку»
+    rows = [
+        [InlineKeyboardButton(text="⬅️ Назад к группам", callback_data="back:groups")]
+    ]
+    if has_last:
+        rows[0].append(InlineKeyboardButton(text="🔁 Ещё такой же", callback_data="ex:repeat"))
+    rows.append([InlineKeyboardButton(text="✅ Завершить упражнение", callback_data="ex:finish")])
+    return InlineKeyboardMarkup(inline_keyboard=rows)
 
 async def _exercise_name(ex_id: int) -> str:
     async with await get_session(settings.database_url) as session:
@@ -117,14 +119,23 @@ async def _count_sets_for_ex(workout_id: int, exercise_id: int) -> int:
         )
         return int((await session.exec(q)).one() or 0)
 
-def _exercise_card_text(name: str, saved_sets: int) -> str:
+async def _last_set_for_ex(workout_id: int, exercise_id: int) -> tuple[Optional[float], Optional[int]]:
+    async with await get_session(settings.database_url) as session:
+        q = (select(WorkoutItem)
+             .where(WorkoutItem.workout_id == workout_id, WorkoutItem.exercise_id == exercise_id)
+             .order_by(WorkoutItem.id.desc())
+             .limit(1))
+        item = (await session.exec(q)).first()
+        if not item:
+            return None, None
+        return float(item.weight) if item.weight is not None else None, int(item.reps) if item.reps is not None else None
+
+def _exercise_card_text(name: str, saved_sets: int, last_w: Optional[float], last_r: Optional[int]) -> str:
+    last_str = f"{last_w:.1f} кг × {last_r}" if (last_w is not None and last_r is not None) else "—"
     return (
         f"🏋️ <b>{name}</b>\n"
-        f"Сохранённых подходов: <b>{saved_sets}</b>\n\n"
-        "Введи подход в формате:\n"
-        "<code>вес повторы</code> или <code>вес/повторы</code>\n"
-        "Примеры: <code>75 10</code>, <code>80/8</code>, <code>112,5 5</code>, <code>24.5/8</code>\n\n"
-        "Можно вводить подряд несколько сообщений."
+        f"Подходы: <b>{saved_sets}</b> • Последний: <b>{last_str}</b>\n\n"
+        f"Введи вес и повторы через \"/\" или пробел."
     )
 
 async def _workout_totals(workout_id: int) -> tuple[int, float]:
@@ -216,19 +227,22 @@ async def pick_exercise(cb: CallbackQuery, state: FSMContext):
     exercise_id = int(cb.data.split(":", 1)[1])
     await state.update_data(exercise_id=exercise_id)
 
-    name = await _exercise_name(exercise_id)
     data = await state.get_data()
     workout_id = int(data.get("workout_id") or 0)
+
+    name = await _exercise_name(exercise_id)
     saved = await _count_sets_for_ex(workout_id, exercise_id)
+    last_w, last_r = await _last_set_for_ex(workout_id, exercise_id)
 
     await cb.message.edit_text(
-        _exercise_card_text(name, saved),
-        reply_markup=_exercise_panel_kb(),
+        _exercise_card_text(name, saved, last_w, last_r),
+        reply_markup=_exercise_panel_kb(has_last=(last_w is not None and last_r is not None)),
         parse_mode="HTML"
     )
 
-    # запомним id сообщения экрана упражнения, чтобы обновлять счётчик
-    await state.update_data(s_last_msg=cb.message.message_id, s_ex_name=name)
+    # запомним id сообщения экрана упражнения, чтобы обновлять счётчик и «Последний»
+    await state.update_data(s_last_msg=cb.message.message_id, s_ex_name=name,
+                            last_weight=last_w, last_reps=last_r)
     await state.set_state(Training.log_set)
 
 # ========= Завершить упражнение (только возврат к списку) =========
@@ -247,6 +261,41 @@ async def finish_exercise(cb: CallbackQuery, state: FSMContext):
     await safe_edit_text(cb.message, f"Выбери упражнение ({total} найдено):", reply_markup=_exercises_kb(exs))
     await state.set_state(Training.choose_exercise)
 
+# ========= Повторить прошлый подход кнопкой =========
+@training_router.callback_query(F.data == "ex:repeat", Training.log_set)
+async def repeat_last_set(cb: CallbackQuery, state: FSMContext):
+    await cb.answer()
+    data = await state.get_data()
+    workout_id = int(data.get("workout_id") or 0)
+    exercise_id = int(data.get("exercise_id") or 0)
+    last_w = data.get("last_weight")
+    last_r = data.get("last_reps")
+
+    if not workout_id or not exercise_id or last_w is None or last_r is None:
+        await cb.message.answer("Сначала введи первый подход вручную.")
+        return
+
+    async with await get_session(settings.database_url) as session:
+        item = WorkoutItem(
+            workout_id=workout_id,
+            exercise_id=exercise_id,
+            weight=float(last_w),
+            reps=int(last_r),
+            created_at=datetime.utcnow(),
+        )
+        session.add(item)
+        await session.commit()
+
+    # Обновляем карточку
+    saved = await _count_sets_for_ex(workout_id, exercise_id)
+    name = data.get("s_ex_name") or await _exercise_name(exercise_id)
+    card_text = _exercise_card_text(name, saved, float(last_w), int(last_r))
+
+    try:
+        await cb.message.edit_text(card_text, reply_markup=_exercise_panel_kb(True), parse_mode="HTML")
+    except Exception:
+        await cb.message.answer(card_text, reply_markup=_exercise_panel_kb(True), parse_mode="HTML")
+
 # ========= Ввод подхода =========
 @training_router.message(Training.log_set)
 async def log_set(msg: Message, state: FSMContext):
@@ -254,8 +303,7 @@ async def log_set(msg: Message, state: FSMContext):
     m = STRENGTH_INPUT_RE.match(raw)
     if not m:
         await msg.answer(
-            "Формат: <b>вес повторы</b> или <b>вес/повторы</b>\n"
-            "Примеры: <code>75 10</code>, <code>80/8</code>, <code>112,5 5</code>, <code>24.5/8</code>",
+            "Введи вес и повторы через \"/\" или пробел. Пример: <code>75 10</code> или <code>80/8</code>",
             parse_mode="HTML",
         )
         return
@@ -309,30 +357,34 @@ async def log_set(msg: Message, state: FSMContext):
         session.add(item)
         await session.commit()
 
-    # Обновляем счётчик на экране упражнения
+    # Обновляем карточку: счётчик и «Последний»
     saved = await _count_sets_for_ex(workout_id, exercise_id)
-    card_text = _exercise_card_text(ex_name, saved)
+    card_text = _exercise_card_text(ex_name, saved, weight, reps)
+    await state.update_data(last_weight=weight, last_reps=reps)
 
     try:
         await msg.bot.edit_message_text(
             chat_id=msg.chat.id,
             message_id=last_msg_id or msg.message_id,
             text=card_text,
-            reply_markup=_exercise_panel_kb(),
+            reply_markup=_exercise_panel_kb(True),
             parse_mode="HTML",
         )
     except Exception:
-        sent = await msg.answer(card_text, reply_markup=_exercise_panel_kb(), parse_mode="HTML")
+        sent = await msg.answer(card_text, reply_markup=_exercise_panel_kb(True), parse_mode="HTML")
         await state.update_data(s_last_msg=sent.message_id)
 
-    # Подтверждение отдельным сообщением
-    await msg.answer(f"✅ Сохранено: {ex_name} — {weight:.1f} кг × {reps}")
-
-# ========= Завершить ВСЮ тренировку =========
+# ========= Завершить ВСЮ тренировку (только вне упражнения) =========
 @training_router.callback_query(F.data == "workout:finish")
 async def workout_finish(cb: CallbackQuery, state: FSMContext):
     await cb.answer()
     data = await state.get_data()
+    # Разрешаем завершать из списка упражнений; если пользователь всё ещё в лог-состоянии — мягко откажем
+    cur = await state.get_state()
+    if cur and cur.endswith("log_set"):
+        await cb.message.answer("Сначала «✅ Завершить упражнение». Потом — «🏁 Завершить тренировку».")
+        return
+
     workout_id = int(data.get("workout_id") or 0)
 
     # если потеряли id тренировки — найдём последнюю по пользователю
