@@ -1,7 +1,7 @@
 # routers/feedback.py — сбор обратной связи и пересылка во второго бота
 
-from routers.profile import main_menu
 from __future__ import annotations
+from routers.profile import main_menu
 
 import asyncio
 from datetime import datetime, timedelta
