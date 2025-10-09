@@ -1,46 +1,51 @@
-# routers/training.py — совместимо с текущей схемой БД (db.py из дампа 87)
-# Силовые тренировки: выбор группы, упражнений, логирование подходов, итог
+# routers/training.py — финальная версия под текущую схему БД
+# Силовые: группы → упражнения → ввод "вес повторы" / "вес/повторы" → счётчик → завершение
 
 from __future__ import annotations
 
 from datetime import datetime
 from typing import Optional, Iterable, List
+import re
 
 from aiogram import Router, F
 from aiogram.types import Message, CallbackQuery, InlineKeyboardMarkup, InlineKeyboardButton
 from aiogram.fsm.state import StatesGroup, State
 from aiogram.fsm.context import FSMContext
 from sqlmodel import select
-from sqlalchemy import func
+from sqlalchemy import func, case
 
 from config import settings
 from db import get_session, User, Workout, WorkoutItem, Exercise, MuscleGroup
 
 training_router = Router()
 
-
-# ===================== Состояния =====================
+# ========= FSM =========
 class Training(StatesGroup):
     choose_group = State()
     choose_exercise = State()
-    log_set = State()  # ввод "вес повторы" для выбранного упражнения
+    log_set = State()  # ввод подходов для выбранного упражнения
 
+# ========= Парсер ввода =========
+# Разделитель между весом и повторами: пробел или "/" (НЕ запятая/точка, они допустимы только ВНУТРИ веса)
+STRENGTH_INPUT_RE = re.compile(
+    r"^\s*(?P<kg>\d+(?:[.,]\d+)?)\s*(?:/|\s+)\s*(?P<reps>\d+)\s*$"
+)
 
-# ===================== Вспомогательные =====================
+# ========= Утилиты =========
 async def _get_user(tg_id: int) -> Optional[User]:
     async with await get_session(settings.database_url) as session:
         res = await session.exec(select(User).where(User.tg_id == tg_id))
         return res.first()
 
 async def _create_workout_for_user(tg_id: int) -> int:
-    """Всегда создаём новую тренировку (как в cardio), возвращаем workout.id"""
+    """Создаём новую силовую тренировку (как в кардио) и возвращаем ID."""
     async with await get_session(settings.database_url) as session:
         u = await session.exec(select(User).where(User.tg_id == tg_id))
         user = u.first()
         if not user:
             raise RuntimeError("NO_USER")
         title = datetime.now().strftime("%Y-%m-%d %H:%M")
-        w = Workout(user_id=user.id, title=title)
+        w = Workout(user_id=user.id, title=title)  # created_at ставится моделью
         session.add(w)
         await session.commit()
         await session.refresh(w)
@@ -57,11 +62,13 @@ async def _fetch_exercises(group_id: Optional[int], page: int = 0, per_page: int
         if group_id:
             base = base.where(Exercise.primary_muscle_id == group_id)
 
-        cnt = (await session.exec(select(func.count()).select_from(base.subquery()))).one() or 0
+        count_query = select(func.count()).select_from(base.subquery())
+        total = (await session.exec(count_query)).one() or 0
+
         res = await session.exec(
             base.order_by(Exercise.name.asc()).offset(page * per_page).limit(per_page)
         )
-        return res.all(), int(cnt)
+        return res.all(), int(total)
 
 def _chunk(it: Iterable, n: int) -> list[list]:
     row, rows = [], []
@@ -115,19 +122,14 @@ def _exercise_card_text(name: str, saved_sets: int) -> str:
         f"🏋️ <b>{name}</b>\n"
         f"Сохранённых подходов: <b>{saved_sets}</b>\n\n"
         "Введи подход в формате:\n"
-        "<code>вес повторы</code>\n"
-        "например <code>75 10</code>\n\n"
+        "<code>вес повторы</code> или <code>вес/повторы</code>\n"
+        "Примеры: <code>75 10</code>, <code>80/8</code>, <code>112,5 5</code>, <code>24.5/8</code>\n\n"
         "Можно вводить подряд несколько сообщений."
     )
 
 async def _workout_totals(workout_id: int) -> tuple[int, float]:
-    """
-    Подсчёт итогов:
-      - sets: число силовых подходов (weight & reps заданы)
-      - lifted: сумма weight*reps с поправкой ×2 для упражнений с гантелями
-    """
+    """Итоги тренировки: число подходов и поднятый вес (гантельные ×2 по названию)."""
     async with await get_session(settings.database_url) as session:
-        # Кол-во подходов
         q_sets = select(func.count()).where(
             WorkoutItem.workout_id == workout_id,
             WorkoutItem.reps.is_not(None),
@@ -135,9 +137,6 @@ async def _workout_totals(workout_id: int) -> tuple[int, float]:
         )
         sets_cnt = int((await session.exec(q_sets)).one() or 0)
 
-        # Поднятый вес с учётом гантелей (name LIKE '%гантел%')
-        # SUM( (CASE WHEN lower(ex.name) LIKE '%гантел%' THEN 2 ELSE 1 END) * wi.weight * wi.reps )
-        from sqlalchemy import case
         q_lifted = (
             select(
                 func.coalesce(
@@ -161,13 +160,18 @@ async def _workout_totals(workout_id: int) -> tuple[int, float]:
 
     return sets_cnt, lifted
 
+async def safe_edit_text(message, text: str, reply_markup=None):
+    try:
+        await message.edit_text(text, reply_markup=reply_markup, parse_mode="HTML")
+    except Exception:
+        await message.answer(text, reply_markup=reply_markup, parse_mode="HTML")
 
-# ===================== Старт силовой =====================
+# ========= Старт силовой =========
 @training_router.message(F.text == "🏋️ Тренировка")
 async def start_training(msg: Message, state: FSMContext):
     user = await _get_user(msg.from_user.id)
-    if not user or not all([user.gender, user.weight_kg, user.height_cm, user.age]):
-        await msg.answer("Сначала /start и заполни профиль. Это займёт минуту, переживёшь.")
+    if not user:
+        await msg.answer("Сначала /start и заполни профиль. Это быстро.")
         return
 
     workout_id = await _create_workout_for_user(msg.from_user.id)
@@ -182,32 +186,30 @@ async def start_training(msg: Message, state: FSMContext):
     await msg.answer("Выбери группу мышц:", reply_markup=_groups_kb(groups))
     await state.set_state(Training.choose_group)
 
-
-# ===================== Выбор группы =====================
+# ========= Выбор группы =========
 @training_router.callback_query(F.data.startswith("grp:"), Training.choose_group)
 async def pick_group(cb: CallbackQuery, state: FSMContext):
     await cb.answer()
     group_id = int(cb.data.split(":", 1)[1])
+    await state.update_data(group_id=group_id)
 
     exs, total = await _fetch_exercises(group_id)
     if not exs:
-        await cb.message.edit_text("В этой группе пока нет упражнений. Выбери другую.")
+        await safe_edit_text(cb.message, "В этой группе пока нет упражнений. Выбери другую.")
         return
 
-    await cb.message.edit_text(f"Выбери упражнение ({total} найдено):", reply_markup=_exercises_kb(exs))
-    await state.update_data(group_id=group_id)
+    await safe_edit_text(cb.message, f"Выбери упражнение ({total} найдено):", reply_markup=_exercises_kb(exs))
     await state.set_state(Training.choose_exercise)
 
-
-# ===================== Назад к группам =====================
+# ========= Назад к группам (из любых состояний силовой) =========
 @training_router.callback_query(F.data == "back:groups")
 async def back_groups(cb: CallbackQuery, state: FSMContext):
     await cb.answer()
     groups = await _fetch_groups()
-    await cb.message.edit_text("Выбери группу мышц:", reply_markup=_groups_kb(groups))
+    await safe_edit_text(cb.message, "Выбери группу мышц:", reply_markup=_groups_kb(groups))
     await state.set_state(Training.choose_group)
 
-
+# ========= Выбор упражнения =========
 @training_router.callback_query(F.data.startswith("ex:"), Training.choose_exercise)
 async def pick_exercise(cb: CallbackQuery, state: FSMContext):
     await cb.answer()
@@ -215,9 +217,8 @@ async def pick_exercise(cb: CallbackQuery, state: FSMContext):
     await state.update_data(exercise_id=exercise_id)
 
     name = await _exercise_name(exercise_id)
-
     data = await state.get_data()
-    workout_id = int(data.get("workout_id", 0))
+    workout_id = int(data.get("workout_id") or 0)
     saved = await _count_sets_for_ex(workout_id, exercise_id)
 
     await cb.message.edit_text(
@@ -226,62 +227,77 @@ async def pick_exercise(cb: CallbackQuery, state: FSMContext):
         parse_mode="HTML"
     )
 
-    # сохраним id редактируемого сообщения, чтобы обновлять его дальше
+    # запомним id сообщения экрана упражнения, чтобы обновлять счётчик
     await state.update_data(s_last_msg=cb.message.message_id, s_ex_name=name)
     await state.set_state(Training.log_set)
 
-# ===== Завершить текущее упражнение (вернуться к списку упражнений) =====
+# ========= Завершить упражнение (только возврат к списку) =========
 @training_router.callback_query(F.data == "ex:finish", Training.log_set)
 async def finish_exercise(cb: CallbackQuery, state: FSMContext):
     await cb.answer()
     data = await state.get_data()
     group_id = int(data.get("group_id") or 0)
     if not group_id:
-        # если потеряли группу — уводим к списку групп
         groups = await _fetch_groups()
-        await cb.message.edit_text("Выбери группу мышц:", reply_markup=_groups_kb(groups))
+        await safe_edit_text(cb.message, "Выбери группу мышц:", reply_markup=_groups_kb(groups))
         await state.set_state(Training.choose_group)
         return
 
-    exercises, total = await _fetch_exercises(group_id)
-    await cb.message.edit_text(
-        f"Выбери упражнение ({total} найдено):",
-        reply_markup=_exercises_kb(exercises),
-    )
+    exs, total = await _fetch_exercises(group_id)
+    await safe_edit_text(cb.message, f"Выбери упражнение ({total} найдено):", reply_markup=_exercises_kb(exs))
     await state.set_state(Training.choose_exercise)
 
-
-# ===================== Ввод подхода (ручной) =====================
+# ========= Ввод подхода =========
 @training_router.message(Training.log_set)
 async def log_set(msg: Message, state: FSMContext):
-    raw = (msg.text or "").strip().replace(",", ".")
-    parts = raw.split()
-    if len(parts) != 2:
-        await msg.answer("Формат: <b>вес повторы</b> (пример: <code>75 10</code>)", parse_mode="HTML")
+    raw = (msg.text or "").strip()
+    m = STRENGTH_INPUT_RE.match(raw)
+    if not m:
+        await msg.answer(
+            "Формат: <b>вес повторы</b> или <b>вес/повторы</b>\n"
+            "Примеры: <code>75 10</code>, <code>80/8</code>, <code>112,5 5</code>, <code>24.5/8</code>",
+            parse_mode="HTML",
+        )
         return
 
-    try:
-        weight = float(parts[0])
-        reps = int(parts[1])
-    except ValueError:
-        await msg.answer("Не похоже на числа. Пример: <code>60 12</code>", parse_mode="HTML")
-        return
-
+    weight = float(m.group("kg").replace(",", "."))
+    reps = int(m.group("reps"))
     if weight <= 0 or reps <= 0:
         await msg.answer("Нужны положительные значения. Пример: <code>40 8</code>", parse_mode="HTML")
         return
 
     data = await state.get_data()
-    workout_id = int(data.get("workout_id", 0))
-    exercise_id = int(data.get("exercise_id", 0))
-    last_msg_id = int(data.get("s_last_msg", 0))
-    ex_name = data.get("s_ex_name") or await _exercise_name(exercise_id)
+    workout_id = int(data.get("workout_id") or 0)
+    exercise_id = int(data.get("exercise_id") or 0)
+    last_msg_id = int(data.get("s_last_msg") or 0)
+    ex_name = data.get("s_ex_name") or (await _exercise_name(exercise_id))
 
-    if not workout_id or not exercise_id:
+    # Автовосстановление workout_id, если пропал
+    if not workout_id:
+        async with await get_session(settings.database_url) as session:
+            res = await session.exec(
+                select(Workout)
+                .join(User, User.id == Workout.user_id)
+                .where(User.tg_id == msg.from_user.id)
+                .order_by(Workout.created_at.desc())
+                .limit(1)
+            )
+            last = res.first()
+            if last:
+                workout_id = last.id
+                await state.update_data(workout_id=workout_id)
+
+    if not exercise_id:
+        await msg.answer("Не выбрано упражнение. Сначала нажми на упражнение в списке.")
+        await state.set_state(Training.choose_exercise)
+        return
+
+    if not workout_id:
         await msg.answer("Сессия потерялась. Нажми «🏋️ Тренировка» заново.")
         await state.clear()
         return
 
+    # Сохраняем подход
     async with await get_session(settings.database_url) as session:
         item = WorkoutItem(
             workout_id=workout_id,
@@ -293,31 +309,26 @@ async def log_set(msg: Message, state: FSMContext):
         session.add(item)
         await session.commit()
 
-    # Пересчёт счётчика и обновление карточки тем же message_id
+    # Обновляем счётчик на экране упражнения
     saved = await _count_sets_for_ex(workout_id, exercise_id)
-    text = _exercise_card_text(ex_name, saved)
+    card_text = _exercise_card_text(ex_name, saved)
 
     try:
         await msg.bot.edit_message_text(
             chat_id=msg.chat.id,
             message_id=last_msg_id or msg.message_id,
-            text=text,
+            text=card_text,
             reply_markup=_exercise_panel_kb(),
             parse_mode="HTML",
         )
     except Exception:
-        # если не получилось отредактировать, просто отправим новую карточку
-        sent = await msg.answer(text, reply_markup=_exercise_panel_kb(), parse_mode="HTML")
-        last_msg_id = sent.message_id
-        await state.update_data(s_last_msg=last_msg_id)
+        sent = await msg.answer(card_text, reply_markup=_exercise_panel_kb(), parse_mode="HTML")
+        await state.update_data(s_last_msg=sent.message_id)
 
-    # маленькое подтверждение отдельным сообщением, чтобы пользователь видел итог именно этого ввода
+    # Подтверждение отдельным сообщением
     await msg.answer(f"✅ Сохранено: {ex_name} — {weight:.1f} кг × {reps}")
 
-
-# ===== Завершить всю тренировку (явно) =====
-from sqlalchemy import func, case
-
+# ========= Завершить ВСЮ тренировку =========
 @training_router.callback_query(F.data == "workout:finish")
 async def workout_finish(cb: CallbackQuery, state: FSMContext):
     await cb.answer()
@@ -338,44 +349,15 @@ async def workout_finish(cb: CallbackQuery, state: FSMContext):
             workout_id = last.id if last else 0
 
     if not workout_id:
-        await cb.message.edit_text("Активной тренировки не найдено. Нажми «🏋️ Тренировка».")
+        await safe_edit_text(cb.message, "Активной тренировки не найдено. Нажми «🏋️ Тренировка».")
         await state.clear()
         return
 
-    # считаем итоги: подходы и "поднятый вес" с ×2 для гантельных
-    async with await get_session(settings.database_url) as session:
-        q_sets = select(func.count()).where(
-            WorkoutItem.workout_id == workout_id,
-            WorkoutItem.reps.is_not(None),
-            WorkoutItem.weight.is_not(None),
-        )
-        sets_cnt = int((await session.exec(q_sets)).one() or 0)
-
-        q_lifted = (
-            select(
-                func.coalesce(
-                    func.sum(
-                        case(
-                            (func.lower(Exercise.name).like("%гантел%"), 2),
-                            else_=1,
-                        ) * WorkoutItem.weight * WorkoutItem.reps
-                    ),
-                    0
-                )
-            )
-            .join(Exercise, Exercise.id == WorkoutItem.exercise_id)
-            .where(
-                WorkoutItem.workout_id == workout_id,
-                WorkoutItem.reps.is_not(None),
-                WorkoutItem.weight.is_not(None),
-            )
-        )
-        lifted = float((await session.exec(q_lifted)).one() or 0.0)
-
-    await cb.message.edit_text(
+    sets_cnt, lifted = await _workout_totals(workout_id)
+    await safe_edit_text(
+        cb.message,
         "🏁 Тренировка завершена!\n"
         f"Подходов: <b>{sets_cnt}</b>\n"
         f"Поднятый вес: <b>{int(lifted)} кг</b>",
-        parse_mode="HTML",
     )
     await state.clear()
