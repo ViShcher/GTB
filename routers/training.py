@@ -295,11 +295,8 @@ async def finish_exercise(cb: CallbackQuery, state: FSMContext):
         reply_markup=_exercises_kb(exs)
     )
 
-    # 1) Жёстко сбрасываем любой текущий режим ввода
-    await cb.message.answer("\u2060", reply_markup=ReplyKeyboardRemove())
-
-    # 2) Ставим обратно наше «Главное меню» как reply-клавиатуру
-    await cb.message.answer("\u2060", reply_markup=main_menu())
+    # Одним сообщением закрываем ForceReply и возвращаем наше меню — без пустышек и мигалки
+    await cb.message.answer("Ещё одно упражнение?", reply_markup=main_menu())
 
     await state.set_state(Training.choose_exercise)
     
