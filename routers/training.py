@@ -299,6 +299,9 @@ async def finish_exercise(cb: CallbackQuery, state: FSMContext):
 
     exs, total = await _fetch_exercises(group_id)
     await cb.message.edit_text(f"Выбери упражнение ({total} найдено):", reply_markup=_exercises_kb(exs))
+    # здесь как раз и прячем системную клавиатуру, возвращая наше меню
+    await _nudge_main_menu(cb, cb.message.chat.id)
+
     await state.set_state(Training.choose_exercise)
 
 # ========= Повторить прошлый подход кнопкой =========
@@ -336,8 +339,6 @@ async def repeat_last_set(cb: CallbackQuery, state: FSMContext):
     except Exception:
         await cb.message.answer(card_text, reply_markup=_exercise_panel_kb(True), parse_mode="HTML")
 
-    # тихо вернём главное меню как реплай-клавиатуру
-    await _nudge_main_menu(cb, cb.message.chat.id)
 
 # ========= Ввод подхода =========
 # Явно ловим ТОЛЬКО текст, пока в состоянии log_set
@@ -415,8 +416,6 @@ async def log_set(msg: Message, state: FSMContext):
         sent = await msg.answer(card_text, reply_markup=_exercise_panel_kb(saved > 0), parse_mode="HTML")
         await state.update_data(s_last_msg=sent.message_id)
 
-    # аккуратно переключим реплай-клавиатуру на главное меню
-    await _nudge_main_menu(msg, msg.chat.id)
 
 # ========= Завершить ВСЮ тренировку (только вне упражнения) =========
 @training_router.callback_query(F.data == "workout:finish")
