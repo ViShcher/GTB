@@ -274,7 +274,7 @@ prompt = await cb.message.answer(
 await state.update_data(input_prompt_msg_id=prompt.message_id)
 
 
-    await state.set_state(Training.log_set)
+await state.set_state(Training.log_set)
 
 # ========= Завершить упражнение (только возврат к списку) =========
 @training_router.callback_query(F.data == "ex:finish", Training.log_set)
