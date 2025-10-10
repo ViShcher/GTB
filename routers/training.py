@@ -8,7 +8,7 @@ from typing import Optional, Iterable, List
 import re
 
 from aiogram import Router, F
-from aiogram.types import Message, CallbackQuery, InlineKeyboardMarkup, InlineKeyboardButton, ForceReply
+from aiogram.types import Message, CallbackQuery, InlineKeyboardMarkup, InlineKeyboardButton, ForceReply, ReplyKeyboardRemove
 from aiogram.fsm.state import StatesGroup, State
 from aiogram.fsm.context import FSMContext
 from sqlmodel import select
@@ -30,7 +30,8 @@ class Training(StatesGroup):
 # Разделитель между весом и повторами: пробел или "/"
 # Запятая/точка допустимы ТОЛЬКО внутри веса (112,5; 24.5 и т.п.)
 STRENGTH_INPUT_RE = re.compile(
-    r"^\s*(?P<kg>\d+(?:[.,]\d+)?)\s*(?:/|\s+)\s*(?P<reps>\d+)\s*$"
+    r"^\s*(?P<kg>\d+(?:[.,]\d+)?)\s*(?:/|x|х|\s+)\s*(?P<reps>\d+)\s*$",
+    re.IGNORECASE
 )
 
 # ========= Утилиты =========
@@ -287,18 +288,20 @@ async def finish_exercise(cb: CallbackQuery, state: FSMContext):
         return
 
 
+    # Рендер списка упражнений
     exs, total = await _fetch_exercises(group_id)
     await cb.message.edit_text(
         f"Выбери упражнение ({total} найдено):",
         reply_markup=_exercises_kb(exs)
     )
 
-    # Тихо переустанавливаем reply-клавиатуру главного меню.
-    # \u2060 — zero-width no-break space, не оставляет «пустой пузырь» на большинстве клиентов.
+    # 1) Жёстко сбрасываем любой текущий режим ввода
+    await cb.message.answer("\u2060", reply_markup=ReplyKeyboardRemove())
+
+    # 2) Ставим обратно наше «Главное меню» как reply-клавиатуру
     await cb.message.answer("\u2060", reply_markup=main_menu())
 
     await state.set_state(Training.choose_exercise)
-
     
 
 # ========= Повторить прошлый подход кнопкой =========
