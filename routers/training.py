@@ -266,15 +266,15 @@ async def pick_exercise(cb: CallbackQuery, state: FSMContext):
     await state.update_data(s_last_msg=cb.message.message_id, s_ex_name=name,
                             last_weight=last_w, last_reps=last_r)
 
-    # Автопоказ клавиатуры: текст НЕ пустой, иначе клиенты Телеги могут игнорить ForceReply
-prompt = await cb.message.answer(
-    "Введи вес и повторы через \"/\" или пробел.",
-    reply_markup=ForceReply(input_field_placeholder="Вес/повторы")
-)
-await state.update_data(input_prompt_msg_id=prompt.message_id)
+    # Автопоказ клавиатуры
+    prompt = await cb.message.answer(
+        "Введи вес и повторы через \"/\" или пробел.",
+        reply_markup=ForceReply(input_field_placeholder="Вес/повторы")
+    )
+    await state.update_data(input_prompt_msg_id=prompt.message_id)
 
+    await state.set_state(Training.log_set)
 
-await state.set_state(Training.log_set)
 
 # ========= Завершить упражнение (только возврат к списку) =========
 @training_router.callback_query(F.data == "ex:finish", Training.log_set)
