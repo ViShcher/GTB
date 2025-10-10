@@ -15,7 +15,6 @@ from aiogram.exceptions import TelegramBadRequest
 
 from config import settings
 from db import get_session, User, Workout, WorkoutItem, Exercise, MuscleGroup
-from routers.profile import main_menu
 
 training_router = Router()
 
@@ -179,18 +178,6 @@ async def _workout_totals(workout_id: int) -> tuple[int, float]:
 
     return sets_cnt, lifted
 
-async def _nudge_main_menu(msg_or_cb, chat_id: int):
-    """
-    Тихо переключаем реплай-клавиатуру пользователя на главное меню,
-    не засоряя чат: отправим невидимый символ и сразу удалим.
-    """
-    try:
-        sent = await msg_or_cb.bot.send_message(chat_id, "\u2063", reply_markup=main_menu())
-        # пробуем сразу подчистить
-        await msg_or_cb.bot.delete_message(chat_id, sent.message_id)
-    except Exception:
-        # если не вышло удалить — переживём, это просто «пустышка»
-        pass
 
 async def _safe_cb_answer(cb: CallbackQuery):
     try:
@@ -299,9 +286,6 @@ async def finish_exercise(cb: CallbackQuery, state: FSMContext):
 
     exs, total = await _fetch_exercises(group_id)
     await cb.message.edit_text(f"Выбери упражнение ({total} найдено):", reply_markup=_exercises_kb(exs))
-    # здесь как раз и прячем системную клавиатуру, возвращая наше меню
-    await _nudge_main_menu(cb, cb.message.chat.id)
-
     await state.set_state(Training.choose_exercise)
 
 # ========= Повторить прошлый подход кнопкой =========
