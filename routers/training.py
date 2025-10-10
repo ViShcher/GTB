@@ -1,4 +1,4 @@
-# routers/training.py — компактный UX: повтор подхода кнопкой, без лишнего текста
+# routers/training.py — компактный UX: ForceReply на вводе, без лишних сообщений.
 from __future__ import annotations
 
 from datetime import datetime
@@ -6,7 +6,7 @@ from typing import Optional, Iterable, List
 import re
 
 from aiogram import Router, F
-from aiogram.types import Message, CallbackQuery, InlineKeyboardMarkup, InlineKeyboardButton
+from aiogram.types import Message, CallbackQuery, InlineKeyboardMarkup, InlineKeyboardButton, ForceReply
 from aiogram.fsm.state import StatesGroup, State
 from aiogram.fsm.context import FSMContext
 from sqlmodel import select
@@ -14,6 +14,7 @@ from sqlalchemy import func, case
 
 from config import settings
 from db import get_session, User, Workout, WorkoutItem, Exercise, MuscleGroup
+from routers.profile import main_menu
 
 training_router = Router()
 
@@ -37,14 +38,14 @@ async def _get_user(tg_id: int) -> Optional[User]:
         return res.first()
 
 async def _create_workout_for_user(tg_id: int) -> int:
-    """Создаём новую силовую тренировку (как в кардио) и возвращаем ID."""
+    """Создаём новую силовую тренировку и возвращаем ID."""
     async with await get_session(settings.database_url) as session:
         u = await session.exec(select(User).where(User.tg_id == tg_id))
         user = u.first()
         if not user:
             raise RuntimeError("NO_USER")
         title = datetime.now().strftime("%Y-%m-%d %H:%M")
-        w = Workout(user_id=user.id, title=title)  # created_at выставляет модель
+        w = Workout(user_id=user.id, title=title)
         session.add(w)
         await session.commit()
         await session.refresh(w)
@@ -81,13 +82,8 @@ def _chunk(it: Iterable, n: int) -> list[list]:
     return rows
 
 def _groups_kb(groups: list[MuscleGroup]) -> InlineKeyboardMarkup:
-    """
-    Клавиатура выбора группы мышц:
-    - две кнопки в ряд по списку групп;
-    - внизу отдельная строка «🏁 Завершить тренировку».
-    """
     btns = [InlineKeyboardButton(text=g.name, callback_data=f"grp:{g.id}") for g in groups]
-    rows = _chunk(btns, 2)
+    rows = _chunk(btns, 2)  # две кнопки в ряд
     rows.append([InlineKeyboardButton(text="🏁 Завершить тренировку", callback_data="workout:finish")])
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
@@ -102,13 +98,12 @@ def _exercises_kb(exercises: list[Exercise]) -> InlineKeyboardMarkup:
 
 def _exercise_panel_kb(has_last: bool) -> InlineKeyboardMarkup:
     """
-    Пока нет сохранённых подходов: можно уйти «Назад к группам».
-    После первого подхода: убираем «Назад», оставляем только повтор и завершение упражнения.
+    До первого подхода: только «Назад к группам».
+    После первого: «Ещё такой же» + «Завершить упражнение».
     """
     if not has_last:
         return InlineKeyboardMarkup(inline_keyboard=[
             [InlineKeyboardButton(text="⬅️ Назад к группам", callback_data="back:groups")],
-            [InlineKeyboardButton(text="✅ Завершить упражнение", callback_data="ex:finish")],
         ])
     else:
         return InlineKeyboardMarkup(inline_keyboard=[
@@ -183,11 +178,18 @@ async def _workout_totals(workout_id: int) -> tuple[int, float]:
 
     return sets_cnt, lifted
 
-async def safe_edit_text(message, text: str, reply_markup=None):
+async def _nudge_main_menu(msg_or_cb, chat_id: int):
+    """
+    Тихо переключаем реплай-клавиатуру пользователя на главное меню,
+    не засоряя чат: отправим невидимый символ и сразу удалим.
+    """
     try:
-        await message.edit_text(text, reply_markup=reply_markup, parse_mode="HTML")
+        sent = await msg_or_cb.bot.send_message(chat_id, "\u2063", reply_markup=main_menu())
+        # пробуем сразу подчистить
+        await msg_or_cb.bot.delete_message(chat_id, sent.message_id)
     except Exception:
-        await message.answer(text, reply_markup=reply_markup, parse_mode="HTML")
+        # если не вышло удалить — переживём, это просто «пустышка»
+        pass
 
 # ========= Старт силовой =========
 @training_router.message(F.text == "🏋️ Тренировка")
@@ -218,18 +220,18 @@ async def pick_group(cb: CallbackQuery, state: FSMContext):
 
     exs, total = await _fetch_exercises(group_id)
     if not exs:
-        await safe_edit_text(cb.message, "В этой группе пока нет упражнений. Выбери другую.")
+        await cb.message.edit_text("В этой группе пока нет упражнений. Выбери другую.")
         return
 
-    await safe_edit_text(cb.message, f"Выбери упражнение ({total} найдено):", reply_markup=_exercises_kb(exs))
+    await cb.message.edit_text(f"Выбери упражнение ({total} найдено):", reply_markup=_exercises_kb(exs))
     await state.set_state(Training.choose_exercise)
 
-# ========= Назад к группам (из любых состояний силовой) =========
+# ========= Назад к группам =========
 @training_router.callback_query(F.data == "back:groups")
 async def back_groups(cb: CallbackQuery, state: FSMContext):
     await cb.answer()
     groups = await _fetch_groups()
-    await safe_edit_text(cb.message, "Выбери группу мышц:", reply_markup=_groups_kb(groups))
+    await cb.message.edit_text("Выбери группу мышц:", reply_markup=_groups_kb(groups))
     await state.set_state(Training.choose_group)
 
 # ========= Выбор упражнения =========
@@ -248,13 +250,21 @@ async def pick_exercise(cb: CallbackQuery, state: FSMContext):
 
     await cb.message.edit_text(
         _exercise_card_text(name, saved, last_w, last_r),
-        reply_markup=_exercise_panel_kb(has_last=(last_w is not None and last_r is not None)),
+        reply_markup=_exercise_panel_kb(has_last=(saved > 0)),
         parse_mode="HTML"
     )
 
     # запомним id сообщения экрана упражнения, чтобы обновлять счётчик и «Последний»
     await state.update_data(s_last_msg=cb.message.message_id, s_ex_name=name,
                             last_weight=last_w, last_reps=last_r)
+
+    # Автопоказ системной клавиатуры: подкинем ForceReply с плейсхолдером
+    prompt = await cb.message.answer(
+        " ",  # без болтовни, просто активируем поле ввода
+        reply_markup=ForceReply(input_field_placeholder="Вес и повторы (например 75/10)")
+    )
+    await state.update_data(input_prompt_msg_id=prompt.message_id)
+
     await state.set_state(Training.log_set)
 
 # ========= Завершить упражнение (только возврат к списку) =========
@@ -263,14 +273,23 @@ async def finish_exercise(cb: CallbackQuery, state: FSMContext):
     await cb.answer()
     data = await state.get_data()
     group_id = int(data.get("group_id") or 0)
+
+    # Чистим ForceReply-подсказку, если висит
+    prompt_id = data.get("input_prompt_msg_id")
+    if prompt_id:
+        try:
+            await cb.message.bot.delete_message(cb.message.chat.id, prompt_id)
+        except Exception:
+            pass
+
     if not group_id:
         groups = await _fetch_groups()
-        await safe_edit_text(cb.message, "Выбери группу мышц:", reply_markup=_groups_kb(groups))
+        await cb.message.edit_text("Выбери группу мышц:", reply_markup=_groups_kb(groups))
         await state.set_state(Training.choose_group)
         return
 
     exs, total = await _fetch_exercises(group_id)
-    await safe_edit_text(cb.message, f"Выбери упражнение ({total} найдено):", reply_markup=_exercises_kb(exs))
+    await cb.message.edit_text(f"Выбери упражнение ({total} найдено):", reply_markup=_exercises_kb(exs))
     await state.set_state(Training.choose_exercise)
 
 # ========= Повторить прошлый подход кнопкой =========
@@ -308,22 +327,22 @@ async def repeat_last_set(cb: CallbackQuery, state: FSMContext):
     except Exception:
         await cb.message.answer(card_text, reply_markup=_exercise_panel_kb(True), parse_mode="HTML")
 
+    # тихо вернём главное меню как реплай-клавиатуру
+    await _nudge_main_menu(cb, cb.message.chat.id)
+
 # ========= Ввод подхода =========
 @training_router.message(Training.log_set)
 async def log_set(msg: Message, state: FSMContext):
     raw = (msg.text or "").strip()
     m = STRENGTH_INPUT_RE.match(raw)
     if not m:
-        await msg.answer(
-            "Введи вес и повторы через \"/\" или пробел. Пример: <code>75 10</code> или <code>80/8</code>",
-            parse_mode="HTML",
-        )
+        await msg.answer("Формат: <b>вес/повторы</b> или <b>вес повторы</b>", parse_mode="HTML")
         return
 
     weight = float(m.group("kg").replace(",", "."))
     reps = int(m.group("reps"))
     if weight <= 0 or reps <= 0:
-        await msg.answer("Нужны положительные значения. Пример: <code>40 8</code>", parse_mode="HTML")
+        await msg.answer("Нужны положительные значения.", parse_mode="HTML")
         return
 
     data = await state.get_data()
@@ -379,19 +398,22 @@ async def log_set(msg: Message, state: FSMContext):
             chat_id=msg.chat.id,
             message_id=last_msg_id or msg.message_id,
             text=card_text,
-            reply_markup=_exercise_panel_kb(True),
+            reply_markup=_exercise_panel_kb(saved > 0),
             parse_mode="HTML",
         )
     except Exception:
-        sent = await msg.answer(card_text, reply_markup=_exercise_panel_kb(True), parse_mode="HTML")
+        sent = await msg.answer(card_text, reply_markup=_exercise_panel_kb(saved > 0), parse_mode="HTML")
         await state.update_data(s_last_msg=sent.message_id)
+
+    # аккуратно переключим реплай-клавиатуру на главное меню
+    await _nudge_main_menu(msg, msg.chat.id)
 
 # ========= Завершить ВСЮ тренировку (только вне упражнения) =========
 @training_router.callback_query(F.data == "workout:finish")
 async def workout_finish(cb: CallbackQuery, state: FSMContext):
     await cb.answer()
     data = await state.get_data()
-    # Разрешаем завершать из списка упражнений; если пользователь всё ещё в лог-состоянии — мягко откажем
+    # Если пользователь всё ещё в лог-состоянии — мягко откажем
     cur = await state.get_state()
     if cur and cur.endswith("log_set"):
         await cb.message.answer("Сначала «✅ Завершить упражнение». Потом — «🏁 Завершить тренировку».")
@@ -413,15 +435,15 @@ async def workout_finish(cb: CallbackQuery, state: FSMContext):
             workout_id = last.id if last else 0
 
     if not workout_id:
-        await safe_edit_text(cb.message, "Активной тренировки не найдено. Нажми «🏋️ Тренировка».")
+        await cb.message.edit_text("Активной тренировки не найдено. Нажми «🏋️ Тренировка».")
         await state.clear()
         return
 
     sets_cnt, lifted = await _workout_totals(workout_id)
-    await safe_edit_text(
-        cb.message,
+    await cb.message.edit_text(
         "🏁 Тренировка завершена!\n"
         f"Подходов: <b>{sets_cnt}</b>\n"
         f"Поднятый вес: <b>{int(lifted)} кг</b>",
+        parse_mode="HTML",
     )
     await state.clear()
