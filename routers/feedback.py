@@ -1,7 +1,7 @@
-# routers/feedback.py — сбор обратной связи и пересылка во второго бота
+# routers/feedback.py — сбор обратной связи: подсказка остаётся, снимаем только «Отменить»,
+# после отправки показываем «✅ Отправлено…» и открываем главное меню на этом же сообщении.
 
 from __future__ import annotations
-from routers.profile import main_menu
 
 import asyncio
 from datetime import datetime, timedelta
@@ -16,10 +16,11 @@ from sqlmodel import select
 
 from config import settings
 from db import get_session, User, Feedback
+from routers.profile import main_menu  # используем для открытия главного меню без лишнего текста
 
 feedback_router = Router()
 
-# Антиспам в памяти: user_tg_id -> время последней отправки
+# Антиспам в памяти: user_tg_id -> время последней удачной отправки
 _last_sent: dict[int, datetime] = {}
 
 class FB(StatesGroup):
@@ -39,14 +40,14 @@ def cancel_kb() -> InlineKeyboardMarkup:
         [InlineKeyboardButton(text="❌ Отменить", callback_data="fb:cancel")]
     ])
 
-# Открыть меню обратной связи (дергается из Настроек)
+# Открыть меню обратной связи (вызывается из Настроек)
 @feedback_router.callback_query(F.data == "settings:feedback")
 async def open_feedback_menu(cb: CallbackQuery, state: FSMContext):
     await cb.answer()
     await cb.message.edit_text("💬 Обратная связь\nВыбери тип сообщения:", reply_markup=feedback_menu_kb())
     await state.set_state(FB.picking)
 
-# Выбор типа
+# Выбор типа — показываем короткую инструкцию БЕЗ лишней строки про лимит
 @feedback_router.callback_query(F.data.startswith("fb:type:"), FB.picking)
 async def choose_type(cb: CallbackQuery, state: FSMContext):
     await cb.answer()
@@ -54,26 +55,24 @@ async def choose_type(cb: CallbackQuery, state: FSMContext):
     await state.update_data(fb_type=fb_type)
 
     prompt = {
-        "bug": "Опиши проблему. По возможности укажи: что делал, что ожидал, что произошло.",
-        "idea": "Опиши идею или улучшение. Чем конкретнее — тем быстрее сделаем.",
-        "free": "Напиши всё, что хочешь передать разработчику.",
+        "bug": "✍️ Опиши проблему. По возможности укажи: что делал, что ожидал, что произошло.",
+        "idea": "✍️ Опиши идею или улучшение. Чем конкретнее — тем быстрее сделаем.",
+        "free": "✍️ Напиши всё, что хочешь передать разработчику.",
     }[fb_type]
 
-    await cb.message.edit_text(
-        f"✍️ {prompt}\n\nОтправь одним сообщением. Лимит 4096 символов.",
-        reply_markup=cancel_kb()
-    )
-    # запомним id этой карточки, чтобы потом заменить её на «спасибо» без кнопок
+    await cb.message.edit_text(prompt, reply_markup=cancel_kb())
+
+    # запомним id этой карточки с инструкцией, чтобы после отправки убрать ТОЛЬКО кнопку
     await state.update_data(fb_prompt_msg_id=cb.message.message_id)
     await state.set_state(FB.typing)
-
 
 # Отмена ввода
 @feedback_router.callback_query(F.data == "fb:cancel")
 async def cancel_feedback(cb: CallbackQuery, state: FSMContext):
     await cb.answer("Отменено")
     await state.clear()
-    await cb.message.edit_text("Настройки:", reply_markup=feedback_menu_kb())
+    # возвращаем меню обратной связи
+    await cb.message.edit_text("💬 Обратная связь\nВыбери тип сообщения:", reply_markup=feedback_menu_kb())
 
 # Приём текста
 @feedback_router.message(FB.typing)
@@ -112,7 +111,7 @@ async def receive_text(msg: Message, state: FSMContext):
         await session.commit()
         await session.refresh(fb)
 
-    # Переслаем во второго бота
+    # Пересылаем во второго бота
     ok, err = await _relay_to_admin_bot(fb_type=fb_type,
                                         text=text,
                                         from_user=user_tg_id,
@@ -125,32 +124,30 @@ async def receive_text(msg: Message, state: FSMContext):
 
     _last_sent[user_tg_id] = now
 
-    # аккуратно заменим старую карточку с инструкцией на «спасибо» и уберём кнопку «Отменить»
-    prompt_id = (await state.get_data()).get("fb_prompt_msg_id")
-    thanks = "✅ Отправлено. Спасибо, мы уже притворяемся, что читаем."
+    # 1) убираем ТОЛЬКО клавиатуру «Отменить» у старой карточки, текст оставляем прежним
+    prompt_id = data.get("fb_prompt_msg_id")
     if prompt_id:
         try:
-            await msg.bot.edit_message_text(
+            await msg.bot.edit_message_reply_markup(
                 chat_id=msg.chat.id,
                 message_id=prompt_id,
-                text=thanks
+                reply_markup=None
             )
         except Exception:
-            # если не удалось отредактировать — просто отправим новое сообщение
-            await msg.answer(thanks)
-    else:
-        await msg.answer(thanks)
+            pass  # не смертельно, просто не получилось снять клавиатуру
 
-    # очистим состояние и вернём пользователя в главное меню
+    # 2) отправляем «спасибо» и сразу открываем главное меню НА ЭТОМ ЖЕ сообщении
+    thanks = "✅ Отправлено. Спасибо, мы уже притворяемся, что читаем."
+    await msg.answer(thanks, reply_markup=main_menu())
+
+    # 3) чистим состояние
     await state.clear()
-    await msg.answer("Главное меню:", reply_markup=main_menu())
-
 
 async def _relay_to_admin_bot(fb_type: str, text: str, from_user: int, username: Optional[str],
                               full_name: Optional[str], feedback_id: int) -> tuple[bool, Optional[str]]:
     """
     Шлём во второго бота через sendMessage.
-    settings.FEEDBACK_BOT_TOKEN и settings.FEEDBACK_CHAT_ID обязательны.
+    settings.feedback_bot_token и settings.feedback_chat_id обязательны.
     """
     token = settings.feedback_bot_token
     chat_id = settings.feedback_chat_id
