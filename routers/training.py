@@ -1,4 +1,5 @@
 # routers/training.py — компактный UX: ForceReply на вводе, без лишних сообщений.
+from routers.profile import main_menu
 from __future__ import annotations
 
 from datetime import datetime
@@ -284,9 +285,20 @@ async def finish_exercise(cb: CallbackQuery, state: FSMContext):
         await state.set_state(Training.choose_group)
         return
 
+
     exs, total = await _fetch_exercises(group_id)
-    await cb.message.edit_text(f"Выбери упражнение ({total} найдено):", reply_markup=_exercises_kb(exs))
+    await cb.message.edit_text(
+        f"Выбери упражнение ({total} найдено):",
+        reply_markup=_exercises_kb(exs)
+    )
+
+    # Тихо переустанавливаем reply-клавиатуру главного меню.
+    # \u2060 — zero-width no-break space, не оставляет «пустой пузырь» на большинстве клиентов.
+    await cb.message.answer("\u2060", reply_markup=main_menu())
+
     await state.set_state(Training.choose_exercise)
+
+    
 
 # ========= Повторить прошлый подход кнопкой =========
 @training_router.callback_query(F.data == "ex:repeat", Training.log_set)
