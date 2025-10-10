@@ -266,12 +266,13 @@ async def pick_exercise(cb: CallbackQuery, state: FSMContext):
     await state.update_data(s_last_msg=cb.message.message_id, s_ex_name=name,
                             last_weight=last_w, last_reps=last_r)
 
-    # Автопоказ системной клавиатуры: подкинем ForceReply с плейсхолдером
-    prompt = await cb.message.answer(
-        " ",  # без болтовни, просто активируем поле ввода
-        reply_markup=ForceReply(input_field_placeholder="Вес и повторы")
-    )
-    await state.update_data(input_prompt_msg_id=prompt.message_id)
+    # Автопоказ клавиатуры: текст НЕ пустой, иначе клиенты Телеги могут игнорить ForceReply
+prompt = await cb.message.answer(
+    "Введи вес и повторы через \"/\" или пробел.",
+    reply_markup=ForceReply(input_field_placeholder="Вес/повторы")
+)
+await state.update_data(input_prompt_msg_id=prompt.message_id)
+
 
     await state.set_state(Training.log_set)
 
@@ -339,7 +340,8 @@ async def repeat_last_set(cb: CallbackQuery, state: FSMContext):
     await _nudge_main_menu(cb, cb.message.chat.id)
 
 # ========= Ввод подхода =========
-@training_router.message(Training.log_set)
+# Явно ловим ТОЛЬКО текст, пока в состоянии log_set
+@training_router.message(Training.log_set, F.text)
 async def log_set(msg: Message, state: FSMContext):
     raw = (msg.text or "").strip()
     m = STRENGTH_INPUT_RE.match(raw)
