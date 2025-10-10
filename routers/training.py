@@ -11,6 +11,7 @@ from aiogram.fsm.state import StatesGroup, State
 from aiogram.fsm.context import FSMContext
 from sqlmodel import select
 from sqlalchemy import func, case
+from aiogram.exceptions import TelegramBadRequest
 
 from config import settings
 from db import get_session, User, Workout, WorkoutItem, Exercise, MuscleGroup
@@ -191,6 +192,13 @@ async def _nudge_main_menu(msg_or_cb, chat_id: int):
         # если не вышло удалить — переживём, это просто «пустышка»
         pass
 
+async def _safe_cb_answer(cb: CallbackQuery):
+    try:
+        await cb.answer()
+    except TelegramBadRequest:
+        # query уже протух или был отвечен ранее — это не критично
+        pass
+
 # ========= Старт силовой =========
 @training_router.message(F.text == "🏋️ Тренировка")
 async def start_training(msg: Message, state: FSMContext):
@@ -214,7 +222,7 @@ async def start_training(msg: Message, state: FSMContext):
 # ========= Выбор группы =========
 @training_router.callback_query(F.data.startswith("grp:"), Training.choose_group)
 async def pick_group(cb: CallbackQuery, state: FSMContext):
-    await cb.answer()
+    await _safe_cb_answer(cb)
     group_id = int(cb.data.split(":", 1)[1])
     await state.update_data(group_id=group_id)
 
@@ -229,7 +237,7 @@ async def pick_group(cb: CallbackQuery, state: FSMContext):
 # ========= Назад к группам =========
 @training_router.callback_query(F.data == "back:groups")
 async def back_groups(cb: CallbackQuery, state: FSMContext):
-    await cb.answer()
+    await _safe_cb_answer(cb)
     groups = await _fetch_groups()
     await cb.message.edit_text("Выбери группу мышц:", reply_markup=_groups_kb(groups))
     await state.set_state(Training.choose_group)
@@ -237,7 +245,7 @@ async def back_groups(cb: CallbackQuery, state: FSMContext):
 # ========= Выбор упражнения =========
 @training_router.callback_query(F.data.startswith("ex:"), Training.choose_exercise)
 async def pick_exercise(cb: CallbackQuery, state: FSMContext):
-    await cb.answer()
+    await _safe_cb_answer(cb)
     exercise_id = int(cb.data.split(":", 1)[1])
     await state.update_data(exercise_id=exercise_id)
 
@@ -261,7 +269,7 @@ async def pick_exercise(cb: CallbackQuery, state: FSMContext):
     # Автопоказ системной клавиатуры: подкинем ForceReply с плейсхолдером
     prompt = await cb.message.answer(
         " ",  # без болтовни, просто активируем поле ввода
-        reply_markup=ForceReply(input_field_placeholder="Вес и повторы (например 75/10)")
+        reply_markup=ForceReply(input_field_placeholder="Вес и повторы")
     )
     await state.update_data(input_prompt_msg_id=prompt.message_id)
 
@@ -270,7 +278,7 @@ async def pick_exercise(cb: CallbackQuery, state: FSMContext):
 # ========= Завершить упражнение (только возврат к списку) =========
 @training_router.callback_query(F.data == "ex:finish", Training.log_set)
 async def finish_exercise(cb: CallbackQuery, state: FSMContext):
-    await cb.answer()
+    await _safe_cb_answer(cb)
     data = await state.get_data()
     group_id = int(data.get("group_id") or 0)
 
@@ -295,7 +303,7 @@ async def finish_exercise(cb: CallbackQuery, state: FSMContext):
 # ========= Повторить прошлый подход кнопкой =========
 @training_router.callback_query(F.data == "ex:repeat", Training.log_set)
 async def repeat_last_set(cb: CallbackQuery, state: FSMContext):
-    await cb.answer()
+    await _safe_cb_answer(cb)
     data = await state.get_data()
     workout_id = int(data.get("workout_id") or 0)
     exercise_id = int(data.get("exercise_id") or 0)
@@ -411,7 +419,7 @@ async def log_set(msg: Message, state: FSMContext):
 # ========= Завершить ВСЮ тренировку (только вне упражнения) =========
 @training_router.callback_query(F.data == "workout:finish")
 async def workout_finish(cb: CallbackQuery, state: FSMContext):
-    await cb.answer()
+    await _safe_cb_answer(cb)
     data = await state.get_data()
     # Если пользователь всё ещё в лог-состоянии — мягко откажем
     cur = await state.get_state()
