@@ -1,6 +1,7 @@
 # routers/training.py — компактный UX: ForceReply на вводе, без лишних сообщений.
-from routers.profile import main_menu
 from __future__ import annotations
+
+from routers.profile import main_menu
 
 from datetime import datetime
 from typing import Optional, Iterable, List
