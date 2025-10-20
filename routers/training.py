@@ -1,4 +1,4 @@
-# routers/training.py — автофиниш 2ч и «якорь» списка упражнений внизу
+# routers/training.py
 from __future__ import annotations
 
 from datetime import datetime, timedelta
@@ -199,7 +199,6 @@ async def _check_autofinish(tg_id: int) -> Optional[int]:
     Не зависит от наличия поля finished_at: поддерживает и finished_at, и finished (bool).
     """
     async with await get_session(settings.database_url) as session:
-        # Берём последнюю тренировку пользователя без каких-либо where по finished_*
         wq = (
             select(Workout)
             .join(User, User.id == Workout.user_id)
@@ -211,7 +210,6 @@ async def _check_autofinish(tg_id: int) -> Optional[int]:
         if not workout:
             return None
 
-        # Определяем, уже закрыта ли тренировка
         finished_at_val = getattr(workout, "finished_at", None)
         finished_bool_val = getattr(workout, "finished", None)
 
@@ -224,7 +222,6 @@ async def _check_autofinish(tg_id: int) -> Optional[int]:
         if already_finished:
             return None
 
-        # Последняя активность: либо по подходам, либо создание тренировки
         iq = select(func.max(WorkoutItem.created_at)).where(WorkoutItem.workout_id == workout.id)
         last_item_ts = (await session.exec(iq)).one()
         last_item_ts = last_item_ts if isinstance(last_item_ts, datetime) else None
@@ -234,7 +231,6 @@ async def _check_autofinish(tg_id: int) -> Optional[int]:
         if datetime.utcnow() - last_activity < timedelta(hours=2):
             return None
 
-        # Закрываем тренировку с учётом доступных полей
         if hasattr(workout, "finished_at"):
             setattr(workout, "finished_at", datetime.utcnow())
         elif hasattr(workout, "finished"):
@@ -244,7 +240,6 @@ async def _check_autofinish(tg_id: int) -> Optional[int]:
         await session.commit()
 
         return workout.id
-
 
 # ========= Хелперы показа списков (якорь внизу) =========
 async def _show_groups(msg_or_cb, state: FSMContext):
@@ -272,7 +267,6 @@ async def _show_exercises_anchored(msg_or_cb, state: FSMContext, group_id: int):
     else:
         sent = await msg_or_cb.message.answer(text, reply_markup=_exercises_kb(exs))
 
-    # удалим старый список, если был
     if old_id:
         try:
             chat_id = msg_or_cb.chat.id if isinstance(msg_or_cb, Message) else msg_or_cb.message.chat.id
@@ -282,6 +276,39 @@ async def _show_exercises_anchored(msg_or_cb, state: FSMContext, group_id: int):
 
     await state.update_data(hub_msg_id=sent.message_id)
     await state.set_state(Training.choose_exercise)
+
+# ========= Безопасное редактирование карточки упражнения =========
+async def _edit_or_send(
+    bot,
+    chat_id: int,
+    msg_id: Optional[int],
+    text: str,
+    reply_markup: Optional[InlineKeyboardMarkup],
+    state: FSMContext,
+) -> int:
+    """
+    Пытаемся отредактировать msg_id. Если не получилось (удалено / не найдено) — шлём новое.
+    Возвращаем актуальный message_id и записываем его в FSM как s_last_msg.
+    """
+    if msg_id:
+        try:
+            await bot.edit_message_text(
+                chat_id=chat_id,
+                message_id=msg_id,
+                text=text,
+                reply_markup=reply_markup,
+                parse_mode="HTML",
+            )
+            await state.update_data(s_last_msg=msg_id)
+            return msg_id
+        except TelegramBadRequest:
+            pass
+        except Exception:
+            pass
+
+    sent = await bot.send_message(chat_id, text, reply_markup=reply_markup, parse_mode="HTML")
+    await state.update_data(s_last_msg=sent.message_id)
+    return sent.message_id
 
 # ========= Старт силовой =========
 @training_router.message(F.text == "🏋️ Тренировка")
@@ -315,6 +342,10 @@ async def pick_group(cb: CallbackQuery, state: FSMContext):
 async def back_groups(cb: CallbackQuery, state: FSMContext):
     await _safe_cb_answer(cb)
     await _check_autofinish(cb.from_user.id)
+
+    # очищаем текущую карточку упражнения, если была
+    await state.update_data(s_last_msg=None)
+
     # подчистим якорь списка упражнений, если завис
     data = await state.get_data()
     old_id = data.get("hub_msg_id")
@@ -324,6 +355,7 @@ async def back_groups(cb: CallbackQuery, state: FSMContext):
         except Exception:
             pass
         await state.update_data(hub_msg_id=None)
+
     await _show_groups(cb, state)
 
 # ========= Выбор упражнения =========
@@ -379,6 +411,9 @@ async def finish_exercise(cb: CallbackQuery, state: FSMContext):
             pass
         await state.update_data(input_prompt_msg_id=None)
 
+    # мы покидаем экран упражнения — редактировать карточку больше не будем
+    await state.update_data(s_last_msg=None)
+
     if not group_id:
         await _show_groups(cb, state)
         return
@@ -421,10 +456,15 @@ async def repeat_last_set(cb: CallbackQuery, state: FSMContext):
     name = data.get("s_ex_name") or await _exercise_name(exercise_id)
     card_text = _exercise_card_text(name, saved, float(last_w), int(last_r))
 
-    try:
-        await cb.message.edit_text(card_text, reply_markup=_exercise_panel_kb(True), parse_mode="HTML")
-    except Exception:
-        await cb.message.answer(card_text, reply_markup=_exercise_panel_kb(True), parse_mode="HTML")
+    last_msg_id = int(data.get("s_last_msg") or 0)
+    await _edit_or_send(
+        bot=cb.message.bot,
+        chat_id=cb.message.chat.id,
+        msg_id=last_msg_id,
+        text=card_text,
+        reply_markup=_exercise_panel_kb(True),
+        state=state,
+    )
 
 # ========= Ввод подхода =========
 @training_router.message(Training.log_set, F.text)
@@ -491,17 +531,14 @@ async def log_set(msg: Message, state: FSMContext):
     card_text = _exercise_card_text(ex_name, saved, weight, reps)
     await state.update_data(last_weight=weight, last_reps=reps)
 
-    try:
-        await msg.bot.edit_message_text(
-            chat_id=msg.chat.id,
-            message_id=last_msg_id or msg.message_id,
-            text=card_text,
-            reply_markup=_exercise_panel_kb(saved > 0),
-            parse_mode="HTML",
-        )
-    except Exception:
-        sent = await msg.answer(card_text, reply_markup=_exercise_panel_kb(saved > 0), parse_mode="HTML")
-        await state.update_data(s_last_msg=sent.message_id)
+    await _edit_or_send(
+        bot=msg.bot,
+        chat_id=msg.chat.id,
+        msg_id=last_msg_id,
+        text=card_text,
+        reply_markup=_exercise_panel_kb(saved > 0),
+        state=state,
+    )
 
 # ========= Завершить ВСЮ тренировку (только вне упражнения) =========
 @training_router.callback_query(F.data == "workout:finish")
