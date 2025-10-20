@@ -146,7 +146,29 @@ async def show_profile_card(message: Message, user_tg_id: int):
 @profile_router.callback_query(F.data == "settings:profile")
 async def open_profile_from_settings(cb: CallbackQuery):
     await cb.answer()
-    await show_profile_card(cb.message, cb.from_user.id)
+    # Достаём пользователя
+    async with await get_session(settings.database_url) as session:
+        res = await session.exec(select(User).where(User.tg_id == cb.from_user.id))
+        user = res.first()
+
+    if not user:
+        await cb.message.edit_text("Похоже, ты не прошёл онбординг. Нажми /start.")
+        return
+
+    goal_map = {"lose_weight": "Похудение", "gain_muscle": "Масса", "health": "Здоровье", "none": "Не выбрано"}
+    gender_map = {"male": "Муж", "female": "Жен", None: "Не указано"}
+
+    text = (
+        f"Твой профиль:\n"
+        f"Цель: {goal_map.get(user.goal)}\n"
+        f"Пол: {gender_map.get(user.gender)}\n"
+        f"Вес: {user.weight_kg} кг\n"
+        f"Рост: {user.height_cm} см\n"
+        f"Возраст: {user.age}\n\n"
+        "Выбери, что изменить:"
+    )
+    # Ключевое отличие: РЕДАКТИРУЕМ текущее сообщение, а не шлём новое
+    await cb.message.edit_text(text, reply_markup=profile_edit_kb())
 
 
 # ===== Изменение отдельных полей =====
