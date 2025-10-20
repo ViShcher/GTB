@@ -44,6 +44,7 @@ async def _safe_cb_answer(cb: CallbackQuery):
     try:
         await cb.answer()
     except TelegramBadRequest:
+        # протухший/повторный callback — игнорируем
         pass
 
 async def _get_user(tg_id: int) -> Optional[User]:
@@ -248,7 +249,7 @@ async def _show_groups(msg_or_cb, state: FSMContext):
     if isinstance(msg_or_cb, Message):
         await msg_or_cb.answer(text, reply_markup=_groups_kb(groups))
     else:
-        await msg_or_cb.message.edit_text(text, reply_markup=_groups_kb(groups))
+        await _edit_current_or_send(msg_or_cb, text, reply_markup=_groups_kb(groups))
     await state.set_state(Training.choose_group)
 
 async def _show_exercises_anchored(msg_or_cb, state: FSMContext, group_id: int):
@@ -309,6 +310,33 @@ async def _edit_or_send(
     sent = await bot.send_message(chat_id, text, reply_markup=reply_markup, parse_mode="HTML")
     await state.update_data(s_last_msg=sent.message_id)
     return sent.message_id
+
+async def _edit_current_or_send(
+    cb: CallbackQuery,
+    text: str,
+    reply_markup: Optional[InlineKeyboardMarkup] = None,
+    *,
+    parse_mode: str = "HTML",
+    state: Optional[FSMContext] = None,
+    fsm_store_key: Optional[str] = None,
+) -> int:
+    """
+    Пытаемся отредактировать cb.message. Если не получилось (удалено / протухло) — отправляем новое.
+    Возвращаем актуальный message_id. Если задан fsm_store_key, кладём id в FSM по этому ключу.
+    """
+    try:
+        await cb.message.edit_text(text, reply_markup=reply_markup, parse_mode=parse_mode)
+        mid = cb.message.message_id
+    except TelegramBadRequest:
+        sent = await cb.message.answer(text, reply_markup=reply_markup, parse_mode=parse_mode)
+        mid = sent.message_id
+    except Exception:
+        sent = await cb.message.answer(text, reply_markup=reply_markup, parse_mode=parse_mode)
+        mid = sent.message_id
+
+    if state and fsm_store_key:
+        await state.update_data(**{fsm_store_key: mid})
+    return mid
 
 # ========= Старт силовой =========
 @training_router.message(F.text == "🏋️ Тренировка")
@@ -374,15 +402,15 @@ async def pick_exercise(cb: CallbackQuery, state: FSMContext):
     saved = await _count_sets_for_ex(workout_id, exercise_id)
     last_w, last_r = await _last_set_for_ex(workout_id, exercise_id)
 
-    await cb.message.edit_text(
+    mid = await _edit_current_or_send(
+        cb,
         _exercise_card_text(name, saved, last_w, last_r),
         reply_markup=_exercise_panel_kb(has_last=(saved > 0)),
-        parse_mode="HTML"
+        state=state,
+        fsm_store_key="s_last_msg",
     )
 
-    # запомним id сообщения экрана упражнения, чтобы обновлять счётчик и «Последний»
-    await state.update_data(s_last_msg=cb.message.message_id, s_ex_name=name,
-                            last_weight=last_w, last_reps=last_r)
+    await state.update_data(s_ex_name=name, last_weight=last_w, last_reps=last_r)
 
     # Автопоказ системной клавиатуры: ForceReply с короткой подсказкой
     prompt = await cb.message.answer(
@@ -568,15 +596,15 @@ async def workout_finish(cb: CallbackQuery, state: FSMContext):
             workout_id = last.id if last else 0
 
     if not workout_id:
-        await cb.message.edit_text("Активной тренировки не найдено. Нажми «🏋️ Тренировка».")
+        await _edit_current_or_send(cb, "Активной тренировки не найдено. Нажми «🏋️ Тренировка».")
         await state.clear()
         return
 
     sets_cnt, lifted = await _workout_totals(workout_id)
-    await cb.message.edit_text(
+    await _edit_current_or_send(
+        cb,
         "🏁 Тренировка завершена!\n"
         f"Подходов: <b>{sets_cnt}</b>\n"
         f"Поднятый вес: <b>{int(lifted)} кг</b>",
-        parse_mode="HTML",
     )
     await state.clear()
