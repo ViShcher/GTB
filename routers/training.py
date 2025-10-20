@@ -192,46 +192,59 @@ async def _workout_totals(workout_id: int) -> tuple[int, float]:
 
     return sets_cnt, lifted
 
-# ========= Авто-финиш тренировки (ленивый) =========
+# ========= Авто-финиш тренировки (ленивый, без привязки к имени поля) =========
 async def _check_autofinish(tg_id: int) -> Optional[int]:
     """
-    Если последняя незавершённая тренировка без активности ≥ 2ч,
-    закрываем её. Возвращаем workout_id, если что-то закрыли.
+    Если последняя тренировка без активности ≥ 2ч — закрываем её.
+    Не зависит от наличия поля finished_at: поддерживает и finished_at, и finished (bool).
     """
     async with await get_session(settings.database_url) as session:
-        # последняя незавершённая тренировка
-        wq = (select(Workout)
-              .join(User, User.id == Workout.user_id)
-              .where(User.tg_id == tg_id, Workout.finished_at.is_(None))
-              .order_by(Workout.created_at.desc())
-              .limit(1))
+        # Берём последнюю тренировку пользователя без каких-либо where по finished_*
+        wq = (
+            select(Workout)
+            .join(User, User.id == Workout.user_id)
+            .where(User.tg_id == tg_id)
+            .order_by(Workout.created_at.desc())
+            .limit(1)
+        )
         workout = (await session.exec(wq)).first()
         if not workout:
             return None
 
-        # последняя активность: по подходам или по созданию тренировки
-        iq = (select(func.max(WorkoutItem.created_at))
-              .where(WorkoutItem.workout_id == workout.id))
+        # Определяем, уже закрыта ли тренировка
+        finished_at_val = getattr(workout, "finished_at", None)
+        finished_bool_val = getattr(workout, "finished", None)
+
+        already_finished = False
+        if finished_at_val is not None:
+            already_finished = True
+        elif isinstance(finished_bool_val, bool):
+            already_finished = finished_bool_val
+
+        if already_finished:
+            return None
+
+        # Последняя активность: либо по подходам, либо создание тренировки
+        iq = select(func.max(WorkoutItem.created_at)).where(WorkoutItem.workout_id == workout.id)
         last_item_ts = (await session.exec(iq)).one()
         last_item_ts = last_item_ts if isinstance(last_item_ts, datetime) else None
 
-        last_activity = max(filter(None, [workout.created_at, last_item_ts]))
-        if not last_activity:
-            last_activity = workout.created_at
+        last_activity = max(filter(None, [workout.created_at, last_item_ts])) or workout.created_at
 
         if datetime.utcnow() - last_activity < timedelta(hours=2):
             return None
 
-        # закрываем
-        workout.finished_at = datetime.utcnow()
-        await session.add(workout)
+        # Закрываем тренировку с учётом доступных полей
+        if hasattr(workout, "finished_at"):
+            setattr(workout, "finished_at", datetime.utcnow())
+        elif hasattr(workout, "finished"):
+            setattr(workout, "finished", True)
+
+        session.add(workout)
         await session.commit()
 
-        # опционально можем посчитать итоги и уведомить
-        sets_cnt, lifted = await _workout_totals(workout.id)
-        # уведомим пользователя скромно
-        # вернём id — пригодится, если нужно что-то ещё
         return workout.id
+
 
 # ========= Хелперы показа списков (якорь внизу) =========
 async def _show_groups(msg_or_cb, state: FSMContext):
