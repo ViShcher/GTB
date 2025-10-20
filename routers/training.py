@@ -631,4 +631,3 @@ async def workout_finish(cb: CallbackQuery, state: FSMContext):
         f"Поднятый вес: <b>{int(lifted)} кг</b>",
     )
     await state.clear()
-
