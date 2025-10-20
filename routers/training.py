@@ -629,5 +629,6 @@ async def workout_finish(cb: CallbackQuery, state: FSMContext):
         "🏁 Тренировка завершена!\n"
         f"Подходов: <b>{sets_cnt}</b>\n"
         f"Поднятый вес: <b>{int(lifted)} кг</b>",
+        reply_markup=main_menu(),  # ← добавили главное меню
     )
     await state.clear()
