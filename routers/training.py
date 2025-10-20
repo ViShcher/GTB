@@ -157,7 +157,6 @@ def _exercise_card_text(name: str, saved_sets: int, last_w: Optional[float], las
     return (
         f"🏋️ <b>{name}</b>\n"
         f"Подходы: <b>{saved_sets}</b> • Последний: <b>{last_str}</b>\n\n"
-        f"Введи вес и повторы через \"/\" или пробел."
     )
 
 async def _workout_totals(workout_id: int) -> tuple[int, float]:
