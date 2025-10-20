@@ -450,7 +450,9 @@ async def finish_exercise(cb: CallbackQuery, state: FSMContext):
     await _show_exercises_anchored(cb, state, group_id)
 
     # Неболтливая подсказка и возврат нашего меню
-    await cb.message.answer("Ещё одно упражнение?", reply_markup=main_menu())
+    after_ex = await cb.message.answer("Ещё одно упражнение?", reply_markup=main_menu())
+    await state.update_data(after_ex_msg_id=after_ex.message_id)
+
 
 # ========= Повторить прошлый подход кнопкой =========
 @training_router.callback_query(F.data == "ex:repeat", Training.log_set)
@@ -599,6 +601,27 @@ async def workout_finish(cb: CallbackQuery, state: FSMContext):
         await _edit_current_or_send(cb, "Активной тренировки не найдено. Нажми «🏋️ Тренировка».")
         await state.clear()
         return
+
+        # подчистим «Ещё одно упражнение?» если висит
+    data = await state.get_data()
+    try:
+        after_ex_id = data.get("after_ex_msg_id")
+        if after_ex_id:
+            await cb.message.bot.delete_message(cb.message.chat.id, after_ex_id)
+    except Exception:
+        pass
+    finally:
+        await state.update_data(after_ex_msg_id=None)
+
+    # заодно уберём якорь списка упражнений, чтобы не болтался под финалкой
+    try:
+        hub_id = data.get("hub_msg_id")
+        if hub_id:
+            await cb.message.bot.delete_message(cb.message.chat.id, hub_id)
+    except Exception:
+        pass
+    finally:
+        await state.update_data(hub_msg_id=None)
 
     sets_cnt, lifted = await _workout_totals(workout_id)
     await _edit_current_or_send(
